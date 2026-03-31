@@ -1,0 +1,70 @@
+{
+    "blink_order_id": "ksJr7P",
+    "order_key": "ksJr7P",
+    "type": "DINE-IN",
+    "channel": "WEBSITE",
+    "brand_id": 55963,
+    "branch_id": "2",
+    "blink_branch_id": 40127,
+    "branch_latitude": "24.813936993327",
+    "branch_longitude": "67.048937112524",
+    "branch_address": "R27X+HH5, Phase V Stadium Commercial Area Defence V Defence Housing Authority",
+    "discount_type": 1,
+    "total_discount_amount": 0,
+    "promo_code": "",
+    "promo_discount": 0,
+    "wallet_amount": 0,
+    "loyalty_amount": 0,
+    "tax": 104,
+    "fbr_pos_charge": 0,
+    "kitchen_notes": "",
+    "due_at": "2026-03-05 00:03:00",
+    "is_pre_order": 0,
+    "customer_name": "Zakir",
+    "customer_phone": "+923351127870",
+    "customer_email": "IND-FIE29985573692@console.indolj.io",
+    "customer_address_description": "DINE-IN",
+    "customer_address_latitude": 0,
+    "customer_address_longitude": 0,
+    "products": [
+        {
+            "product_id": "8",
+            "quantity": 1,
+            "preparation_time_mins": 0,
+            "name": "Chicken Chatni Roll",
+            "unit_price": "345",
+            "total_price": 345,
+            "options": [
+                {
+                    "modifier_option_id": "2492",
+                    "unit_price": "0",
+                    "total_price": "0",
+                    "name": "Wrap in Chapati",
+                    "quantity": 1
+                }
+            ]
+        },
+        {
+            "product_id": "23",
+            "quantity": 1,
+            "preparation_time_mins": 0,
+            "name": "Chicken Malai Chatni Roll",
+            "unit_price": "345",
+            "total_price": 345,
+            "options": [
+                {
+                    "modifier_option_id": "2492",
+                    "unit_price": "0",
+                    "total_price": "0",
+                    "name": "Wrap in Chapati",
+                    "quantity": 1
+                }
+            ]
+        }
+    ],
+    "payment_method": "Cash",
+    "payment": false,
+    "delivery_charges": "0",
+    "subtotal": "690",
+    "total_price": "794"
+}
