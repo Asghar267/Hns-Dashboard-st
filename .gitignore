@@ -13,6 +13,12 @@ __pycache__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Runtime session store (generated; do not commit)
+config/sessions.json
+
+# Credentials should be local-only (use an example/template file for sharing)
+config/credentials.json
+
 # Env
 .env
 .env.*

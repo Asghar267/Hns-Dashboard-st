@@ -64,6 +64,7 @@ from modules.utils import (
 )
 from modules.database import get_saved_category_filters
 from config import app_config
+from components.new_navbar import NewNavbarComponent
 
 
 EXCLUDED_EMPLOYEE_NAMES = {"online/unassigned"}
@@ -604,55 +605,14 @@ def main() -> None:
     if role == "admin":
         tab_map['user_management'] = _render_user_management
 
-    # Build tab order exactly like archive/hns_dashboard_imported.py
-    tab_order = [
-        "Overview",
-        "Order Takers",
-        "Chef Sales",
-        "Chef Targets",
-        "OT Targets",
-        "QR Commission",
-        "Khadda Diagnostics",
-        "Material Cost Commission",
-        "Trends & Analytics",
-        "Ramzan Deals",
-        "Category Filters & Coverage",
-        "Pivot Tables",
-    ]
-
-    if role == "admin":
-        tab_order.append("User Management")
-
-    if allowed_tabs != "all":
-        allowed_labels = set(allowed_tabs)
-        tab_order = [label for label in tab_order if label in allowed_labels]
-
-    label_to_key = {
-        "Overview": "overview",
-        "Order Takers": "order_takers",
-        "Chef Sales": "chef_sales",
-        "Chef Targets": "chef_targets",
-        "OT Targets": "ot_targets",
-        "QR Commission": "qr_commission",
-        "Khadda Diagnostics": "khadda_diagnostics",
-        "Material Cost Commission": "material_cost_commission",
-        "Trends & Analytics": "trends_analytics",
-        "Ramzan Deals": "ramzan_deals",
-        "Category Filters & Coverage": "category_filters_&_coverage",
-        "Pivot Tables": "pivot_tables",
-        "User Management": "user_management",
-    }
-
-    tab_labels = [label for label in tab_order if label_to_key.get(label) in tab_map or label == "User Management"]
-    tabs = st.tabs(tab_labels)
-    for tab_label, tab in zip(tab_labels, tabs):
-        with tab:
-            render_key = label_to_key.get(tab_label, "overview")
-            render_fn = tab_map.get(render_key, _render_overview)
-            try:
-                render_fn()
-            except Exception as e:
-                st.error(f"An error occurred: {e}")
+    # Render a single active tab only (Streamlit reruns on any widget change; this avoids
+    # recomputing the entire dashboard across all tabs on every interaction).
+    active_key = NewNavbarComponent(navbar_config).render(user_record=user_record)
+    render_fn = tab_map.get(active_key) or tab_map.get(active_key.replace("&", "")) or _render_overview
+    try:
+        render_fn()
+    except Exception as e:
+        st.error(f"An error occurred: {e}")
 
     st.markdown("---")
     st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
