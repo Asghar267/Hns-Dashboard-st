@@ -13,6 +13,11 @@ import streamlit as st
 from modules.connection_cloud import DatabaseConfig
 from modules.database import pool, placeholders, build_filter_clause
 from modules.utils import format_currency, export_to_excel
+from modules.foodpanda_reconciliation import (
+    load_foodpanda_order_summary,
+    fetch_foodpanda_sales_by_codes,
+    reconcile_foodpanda_orders,
+)
 
 
 @st.cache_data(ttl=DatabaseConfig.CACHE_TTL)
@@ -37,6 +42,7 @@ def _cached_food_panda_sales(
         COALESCE(e.field_name, 'Online/Unassigned') AS employee_name,
         s.Cust_name AS order_type,
         s.Nt_amount AS net_amount,
+        s.adjustment_comments,
         s.Additional_Comments,
         s.external_ref_type,
         s.external_ref_id
@@ -56,13 +62,12 @@ def _cached_food_panda_sales(
         df["net_amount"] = pd.to_numeric(df["net_amount"], errors="coerce").fillna(0.0)
         # "Order ID" for users = POS sale_id (stable identifier in tblSales).
         df["order_id"] = pd.to_numeric(df["sale_id"], errors="coerce").fillna(0).astype(int)
-        # "Order Code" for integrations = external_ref_id when available.
-        df["order_code"] = (
-            df.get("external_ref_id", "")
-            .astype(str)
-            .str.strip()
-            .replace({"None": "", "nan": ""})
-        )
+        # Foodpanda order code lives in adjustment_comments in this POS DB.
+        # Fall back to Additional_Comments then external_ref_id.
+        adj = df.get("adjustment_comments", "").fillna("").astype(str).str.strip().replace({"None": "", "nan": ""})
+        add = df.get("Additional_Comments", "").fillna("").astype(str).str.strip().replace({"None": "", "nan": ""})
+        ext = df.get("external_ref_id", "").fillna("").astype(str).str.strip().replace({"None": "", "nan": ""})
+        df["order_code"] = adj.mask(adj.eq(""), add).mask(adj.eq("") & add.eq(""), ext)
         df["employee_id"] = pd.to_numeric(df["employee_id"], errors="coerce").fillna(0).astype(int)
         df["employee_code"] = df.get("employee_code", "").fillna("").astype(str)
         df["employee_name"] = df.get("employee_name", "").fillna("").astype(str)
@@ -149,6 +154,7 @@ class FoodPandaTab:
             "shop_name",
             "employee_name",
             "net_amount",
+            "adjustment_comments",
             "Additional_Comments",
             "external_ref_type",
             "external_ref_id",
@@ -169,4 +175,87 @@ class FoodPandaTab:
             data=export_to_excel(df, "Food Panda"),
             file_name=f"food_panda_{self.start_date}_to_{self.end_date}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        st.markdown("---")
+        st.subheader("Reconcile Order Summary.xlsx (Appendix A)")
+        st.caption("Matches Foodpanda `Order Code` to POS Food Panda sales and verifies `Order Amount` vs `NT_amount` (±1 PKR).")
+
+        uploaded = st.file_uploader(
+            "Upload Foodpanda Order Summary file",
+            type=["xlsx", "xls"],
+            key="foodpanda_order_summary_upload",
+        )
+        if uploaded is None:
+            st.info("Upload `005 - Order Summary.xlsx` to run reconciliation.")
+            return
+
+        try:
+            xls = pd.ExcelFile(uploaded)
+            sheet = st.selectbox(
+                "Sheet",
+                options=xls.sheet_names,
+                index=xls.sheet_names.index("Appendix A") if "Appendix A" in xls.sheet_names else 0,
+                key="foodpanda_recon_sheet",
+            )
+            df_excel = load_foodpanda_order_summary(uploaded, sheet_name=sheet)
+        except Exception as e:
+            st.error(f"Failed to read Excel: {e}")
+            return
+
+        tol = 1.0
+        st.caption(f"Tolerance: ±{tol:.0f} PKR")
+
+        codes = df_excel["excel_order_code_norm"].dropna().astype(str).tolist()
+        try:
+            df_db = fetch_foodpanda_sales_by_codes(
+                codes=codes,
+                start_date=self.start_date,
+                end_date=self.end_date,
+                branch_ids=self.selected_branches,
+                data_mode=self.data_mode,
+                chunk_size=800,
+            )
+        except Exception as e:
+            st.error(f"DB fetch failed: {e}")
+            return
+
+        result = reconcile_foodpanda_orders(df_excel=df_excel, df_db=df_db, tolerance_pkr=tol)
+
+        # Summary metrics
+        metrics = {r["metric"]: r["value"] for r in result.summary.to_dict("records")}
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Total Rows", f"{int(metrics.get('total_rows', 0)):,}")
+        c2.metric("Matched OK", f"{int(metrics.get('matched_ok', 0)):,}")
+        c3.metric("Duplicates Resolved", f"{int(metrics.get('duplicate_resolved', 0)):,}")
+        c4.metric("Price Mismatch", f"{int(metrics.get('matched_price_mismatch', 0)):,}")
+        c5.metric("Unmatched", f"{int(metrics.get('unmatched', 0)):,}")
+
+        st.markdown("---")
+        st.subheader("Mismatches")
+        st.dataframe(result.mismatches, width="stretch", hide_index=True, height=260)
+
+        st.subheader("Unmatched")
+        st.dataframe(result.unmatched, width="stretch", hide_index=True, height=260)
+
+        st.subheader("Duplicates (Audit)")
+        st.dataframe(result.duplicates, width="stretch", hide_index=True, height=260)
+
+        st.subheader("Full Reconciliation")
+        st.dataframe(result.full, width="stretch", hide_index=True, height=420)
+
+        from modules.utils import export_tables_to_excel
+        tables = {
+            "recon_full": result.full,
+            "mismatches": result.mismatches,
+            "unmatched": result.unmatched,
+            "duplicates": result.duplicates,
+            "summary": result.summary,
+        }
+        st.download_button(
+            label="Download Reconciliation Excel",
+            data=export_tables_to_excel(tables),
+            file_name=f"foodpanda_recon_{self.start_date}_to_{self.end_date}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="foodpanda_recon_download",
         )
