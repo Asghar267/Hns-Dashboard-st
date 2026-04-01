@@ -1,0 +1,47 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pkl
+*.log
+*.sqlite3
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Env
+.env
+.env.*
+venv/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+
+# Build / cache
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Reports / snapshots / generated artifacts
+snapshots/
+HNS_Deshboard/snapshots/
+reports/
+
+# Archives / exports
+*.xlsx
+*.xls
+*.csv
+*.pdf
+
+# Misc
+__pycache__
