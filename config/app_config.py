@@ -1,4 +1,4 @@
-"""
+﻿"""
 Application Configuration
 Centralized configuration management for the dashboard
 """
@@ -30,7 +30,7 @@ class DatabaseConfig:
 class DashboardConfig:
     """Dashboard configuration"""
     title: str = "HNS Dashboard"
-    page_icon: str = "🏪"
+    page_icon: str = "ðŸª"
     layout: str = "wide"
     initial_sidebar_state: str = "expanded"
     theme: str = "light"
@@ -66,29 +66,28 @@ class AppConfig:
     
 # Navbar & Tab configurations
     NAVBAR_ITEMS = {
-        "tabs": {
-            "Overview": {"icon": "📊", "description": "Main dashboard overview with key metrics"},
-            "Order Takers": {"icon": "👥", "description": "Order Taker performance analysis"},
-            "Chef Sales": {"icon": "🍽️", "description": "Chef sales and product performance"},
-            "Chef Targets": {"icon": "🎯", "description": "Chef sales targets"},
-            "OT Targets": {"icon": "📈", "description": "Order taker targets"},
-            "QR Commission": {"icon": "💳", "description": "QR/Blinkco commission analysis"},
-            "Khadda Diagnostics": {"icon": "🔍", "description": "Khadda data diagnostics"},
-            "Material Cost Commission": {"icon": "💰", "description": "Material cost commissions"},
-            "Trends & Analytics": {"icon": "📊", "description": "Trends and analytics"},
-            "Ramzan Deals": {"icon": "🌙", "description": "Ramzan special deals"},
-            "Category Filters & Coverage": {"icon": "🔧", "description": "Category filters"},
-            "Category Filters & Coverage": {"icon": "📋", "description": "Category coverage analysis"},
-            "Pivot Tables": {"icon": "📋", "description": "Interactive pivot tables"},
-            "User Management": {"icon": "👥", "description": "Admin user management", "admin_only": True}
-        },
-        "globals": [
-            {"label": "Refresh", "icon": "🔄", "key": "refresh"},
-            {"label": "Help", "icon": "❓", "key": "help"}
-        ]
-    }
-    
-    # Legacy TABS (deprecated - use NAVBAR_ITEMS)
+    "tabs": {
+        "Overview": {"icon": "chart", "description": "Main dashboard overview with key metrics"},
+        "Order Takers": {"icon": "users", "description": "Order Taker performance analysis"},
+        "Chef Sales": {"icon": "utensils", "description": "Chef sales and product performance"},
+        "Chef Targets": {"icon": "target", "description": "Chef sales targets"},
+        "Food Panda": {"icon": "delivery", "description": "Food Panda transactions (full listing)"},
+        "OT Targets": {"icon": "trend", "description": "Order taker targets"},
+        "QR Commission": {"icon": "qr", "description": "QR/Blinkco commission analysis"},
+        "Khadda Diagnostics": {"icon": "search", "description": "Khadda data diagnostics"},
+        "Material Cost Commission": {"icon": "money", "description": "Material cost commissions"},
+        "Trends & Analytics": {"icon": "chart", "description": "Trends and analytics"},
+        "Ramzan Deals": {"icon": "moon", "description": "Ramzan special deals"},
+        "Category Filters & Coverage": {"icon": "filter", "description": "Category filters and coverage"},
+        "Pivot Tables": {"icon": "table", "description": "Interactive pivot tables"},
+        "User Management": {"icon": "users", "description": "Admin user management", "admin_only": True}
+    },
+    "globals": [
+        {"label": "Refresh", "icon": "refresh", "key": "refresh"},
+        {"label": "Help", "icon": "help", "key": "help"}
+    ]
+}
+# Legacy TABS (deprecated - use NAVBAR_ITEMS)
     TABS = NAVBAR_ITEMS['tabs']
     
     # Export settings
@@ -176,3 +175,4 @@ class AppConfig:
 
 # Load environment configuration on import
 AppConfig.load_from_env()
+

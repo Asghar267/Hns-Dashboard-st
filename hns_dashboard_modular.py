@@ -31,6 +31,7 @@ except Exception:
 from dashboard_tabs.category_coverage_tab import CategoryCoverageTab
 from dashboard_tabs.chef_sales_tab import ChefSalesTab
 from dashboard_tabs.chef_targets_tab import ChefTargetsTab
+from dashboard_tabs.food_panda_tab import FoodPandaTab
 from dashboard_tabs.material_cost_commission_tab import MaterialCostCommissionTab
 from dashboard_tabs.order_takers_tab import OrderTakersTab
 from dashboard_tabs.overview_tab import OverviewTab
@@ -214,7 +215,7 @@ def render_user_management_tab(branch_name_map: dict) -> None:
         st.dataframe(df_users, width="stretch", hide_index=True, height=240)
 
     tab_options = [
-        "Overview", "Order Takers", "Chef Sales", "Chef Targets", "OT Targets",
+        "Overview", "Order Takers", "Chef Sales", "Chef Targets", "Food Panda", "OT Targets",
         "QR Commission", "Khadda Diagnostics", "Material Cost Commission",
         "Trends & Analytics", "Ramzan Deals", "Category Filters & Coverage", "Pivot Tables",
     ]
@@ -545,6 +546,9 @@ def main() -> None:
     def _render_chef_targets():
         ChefTargetsTab(target_year, target_month, start_date_str, end_date_str, selected_branches, data_mode).render()
 
+    def _render_food_panda():
+        FoodPandaTab(start_date_str, end_date_str, selected_branches, data_mode).render()
+
     def _render_ot_targets():
         OTTargetsTab(target_year, target_month, start_date_str, end_date_str, selected_branches, data_mode).render()
 
@@ -590,6 +594,7 @@ def main() -> None:
         'order_takers': _render_order_takers,
         'chef_sales': _render_chef_sales,
         'chef_targets': _render_chef_targets,
+        'food_panda': _render_food_panda,
         'ot_targets': _render_ot_targets,
         'qr_commission': _render_qr_commission,
         'khadda_diagnostics': _render_khadda_diagnostics,
