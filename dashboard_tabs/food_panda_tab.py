@@ -232,6 +232,10 @@ class FoodPandaTab:
         c5.metric("Unmatched", f"{int(metrics.get('unmatched', 0)):,}")
 
         st.markdown("---")
+        st.subheader("Matched Only")
+        matched_only = result.full[result.full["match_status"].isin(["matched_ok", "duplicate_resolved"])].copy()
+        st.dataframe(matched_only, width="stretch", hide_index=True, height=320)
+
         st.subheader("Mismatches")
         st.dataframe(result.mismatches, width="stretch", hide_index=True, height=260)
 
@@ -247,6 +251,7 @@ class FoodPandaTab:
         from modules.utils import export_tables_to_excel
         tables = {
             "recon_full": result.full,
+            "matched_only": matched_only,
             "mismatches": result.mismatches,
             "unmatched": result.unmatched,
             "duplicates": result.duplicates,
