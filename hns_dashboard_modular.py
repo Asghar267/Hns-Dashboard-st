@@ -159,11 +159,13 @@ def load_custom_css() -> None:
             background-color: {card_bg};
             border-radius: 5px;
         }}
-        /* Fullscreen dataframes: Streamlit uses different containers across versions
-           (dialog/modal). Make the overlay content a flex column and let the grid flex-grow. */
+        /* Fullscreen dataframes: Streamlit uses different containers across versions.
+           Make the overlay full-screen and aggressively override inline heights so the
+           table uses the available viewport instead of leaving blank space. */
         div[role="dialog"],
         div[data-testid="stDialog"],
-        div[data-testid="stModal"] {{
+        div[data-testid="stModal"],
+        div[aria-modal="true"] {{
             position: fixed !important;
             inset: 0 !important;
             width: 100vw !important;
@@ -193,20 +195,37 @@ def load_custom_css() -> None:
             min-height: 0 !important;
         }}
 
-        /* The resizable container / grid editor should take remaining height */
+        /* The dataframe wrapper + resizable container + grid editor should take remaining height.
+           Use calc(...) to beat inline px heights coming from st.dataframe(height=...). */
+        div[role="dialog"] [data-testid="stDataFrame"],
+        div[data-testid="stDialog"] [data-testid="stDataFrame"],
+        div[data-testid="stModal"] [data-testid="stDataFrame"],
+        div[aria-modal="true"] [data-testid="stDataFrame"] {{
+            flex: 1 1 auto !important;
+            min-height: 0 !important;
+            height: calc(100vh - 4rem) !important;
+            max-height: calc(100vh - 4rem) !important;
+        }}
         div[role="dialog"] [data-testid="stDataFrameResizable"],
         div[data-testid="stDialog"] [data-testid="stDataFrameResizable"],
         div[data-testid="stModal"] [data-testid="stDataFrameResizable"],
+        div[aria-modal="true"] [data-testid="stDataFrameResizable"],
         div[role="dialog"] .glideDataEditor,
         div[data-testid="stDialog"] .glideDataEditor,
         div[data-testid="stModal"] .glideDataEditor,
+        div[aria-modal="true"] .glideDataEditor,
         div[role="dialog"] [role="grid"],
         div[data-testid="stDialog"] [role="grid"],
-        div[data-testid="stModal"] [role="grid"] {{
+        div[data-testid="stModal"] [role="grid"],
+        div[aria-modal="true"] [role="grid"],
+        div[role="dialog"] canvas,
+        div[data-testid="stDialog"] canvas,
+        div[data-testid="stModal"] canvas,
+        div[aria-modal="true"] canvas {{
             flex: 1 1 auto !important;
             min-height: 0 !important;
-            height: auto !important;
-            max-height: none !important;
+            height: calc(100vh - 5rem) !important;
+            max-height: calc(100vh - 5rem) !important;
             width: 98vw !important;
             max-width: 98vw !important;
             margin: 0 auto !important;
@@ -215,11 +234,12 @@ def load_custom_css() -> None:
         /* st.table fallback */
         div[role="dialog"] [data-testid="stTable"],
         div[data-testid="stDialog"] [data-testid="stTable"],
-        div[data-testid="stModal"] [data-testid="stTable"] {{
+        div[data-testid="stModal"] [data-testid="stTable"],
+        div[aria-modal="true"] [data-testid="stTable"] {{
             flex: 1 1 auto !important;
             min-height: 0 !important;
-            height: auto !important;
-            max-height: none !important;
+            height: calc(100vh - 5rem) !important;
+            max-height: calc(100vh - 5rem) !important;
             width: 98vw !important;
             max-width: 98vw !important;
             margin: 0 auto !important;
