@@ -54,6 +54,8 @@ def _cached_food_panda_sales(
     if not df.empty:
         df["sale_date"] = pd.to_datetime(df["sale_date"], errors="coerce")
         df["net_amount"] = pd.to_numeric(df["net_amount"], errors="coerce").fillna(0.0)
+        # "Order ID" for users = POS sale_id (stable identifier in tblSales).
+        df["order_id"] = pd.to_numeric(df["sale_id"], errors="coerce").fillna(0).astype(int)
         df["employee_id"] = pd.to_numeric(df["employee_id"], errors="coerce").fillna(0).astype(int)
         df["employee_code"] = df.get("employee_code", "").fillna("").astype(str)
         df["employee_name"] = df.get("employee_name", "").fillna("").astype(str)
@@ -134,6 +136,7 @@ class FoodPandaTab:
             out = out[mask].copy()
 
         default_cols = [
+            "order_id",
             "sale_date",
             "shop_name",
             "employee_name",
@@ -159,4 +162,3 @@ class FoodPandaTab:
             file_name=f"food_panda_{self.start_date}_to_{self.end_date}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-
