@@ -159,10 +159,11 @@ def load_custom_css() -> None:
             background-color: {card_bg};
             border-radius: 5px;
         }}
-        /* Fullscreen dataframes: make the modal truly full-height. Streamlit changes DOM over time,
-           so we target both role-based and data-testid-based selectors. */
+        /* Fullscreen dataframes: Streamlit uses different containers across versions
+           (dialog/modal). Make the overlay content a flex column and let the grid flex-grow. */
         div[role="dialog"],
-        div[data-testid="stDialog"] {{
+        div[data-testid="stDialog"],
+        div[data-testid="stModal"] {{
             position: fixed !important;
             inset: 0 !important;
             width: 100vw !important;
@@ -172,28 +173,53 @@ def load_custom_css() -> None:
             margin: 0 !important;
             padding: 0 !important;
         }}
+
+        /* Modal/dialog content wrapper */
         div[role="dialog"] > div,
-        div[data-testid="stDialog"] > div {{
+        div[data-testid="stDialog"] > div,
+        div[data-testid="stModal"] > div,
+        div[data-testid="stModalContent"] {{
             height: 100vh !important;
             max-height: 100vh !important;
         }}
-        /* Give the grid editor almost the entire viewport height so fullscreen isn't half-blank. */
+
+        /* Force a flex layout so the table area can expand instead of leaving blank space */
+        div[role="dialog"] > div,
+        div[data-testid="stDialog"] > div,
+        div[data-testid="stModal"] > div,
+        div[data-testid="stModalContent"] {{
+            display: flex !important;
+            flex-direction: column !important;
+            min-height: 0 !important;
+        }}
+
+        /* The resizable container / grid editor should take remaining height */
         div[role="dialog"] [data-testid="stDataFrameResizable"],
-        div[role="dialog"] .glideDataEditor,
-        div[role="dialog"] [role="grid"],
         div[data-testid="stDialog"] [data-testid="stDataFrameResizable"],
+        div[data-testid="stModal"] [data-testid="stDataFrameResizable"],
+        div[role="dialog"] .glideDataEditor,
         div[data-testid="stDialog"] .glideDataEditor,
-        div[data-testid="stDialog"] [role="grid"] {{
-            height: calc(100vh - 6rem) !important;
-            max-height: calc(100vh - 6rem) !important;
+        div[data-testid="stModal"] .glideDataEditor,
+        div[role="dialog"] [role="grid"],
+        div[data-testid="stDialog"] [role="grid"],
+        div[data-testid="stModal"] [role="grid"] {{
+            flex: 1 1 auto !important;
+            min-height: 0 !important;
+            height: auto !important;
+            max-height: none !important;
             width: 98vw !important;
             max-width: 98vw !important;
             margin: 0 auto !important;
         }}
+
+        /* st.table fallback */
         div[role="dialog"] [data-testid="stTable"],
-        div[data-testid="stDialog"] [data-testid="stTable"] {{
-            height: calc(100vh - 6rem) !important;
-            max-height: calc(100vh - 6rem) !important;
+        div[data-testid="stDialog"] [data-testid="stTable"],
+        div[data-testid="stModal"] [data-testid="stTable"] {{
+            flex: 1 1 auto !important;
+            min-height: 0 !important;
+            height: auto !important;
+            max-height: none !important;
             width: 98vw !important;
             max-width: 98vw !important;
             margin: 0 auto !important;
