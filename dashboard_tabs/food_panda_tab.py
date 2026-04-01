@@ -56,6 +56,13 @@ def _cached_food_panda_sales(
         df["net_amount"] = pd.to_numeric(df["net_amount"], errors="coerce").fillna(0.0)
         # "Order ID" for users = POS sale_id (stable identifier in tblSales).
         df["order_id"] = pd.to_numeric(df["sale_id"], errors="coerce").fillna(0).astype(int)
+        # "Order Code" for integrations = external_ref_id when available.
+        df["order_code"] = (
+            df.get("external_ref_id", "")
+            .astype(str)
+            .str.strip()
+            .replace({"None": "", "nan": ""})
+        )
         df["employee_id"] = pd.to_numeric(df["employee_id"], errors="coerce").fillna(0).astype(int)
         df["employee_code"] = df.get("employee_code", "").fillna("").astype(str)
         df["employee_name"] = df.get("employee_name", "").fillna("").astype(str)
@@ -137,6 +144,7 @@ class FoodPandaTab:
 
         default_cols = [
             "order_id",
+            "order_code",
             "sale_date",
             "shop_name",
             "employee_name",
