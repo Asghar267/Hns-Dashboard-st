@@ -159,42 +159,44 @@ def load_custom_css() -> None:
             background-color: {card_bg};
             border-radius: 5px;
         }}
-        /* Enable full width/height for tables in fullscreen mode */
-        div[role="dialog"] {{
+        /* Fullscreen dataframes: make the modal truly full-height. Streamlit changes DOM over time,
+           so we target both role-based and data-testid-based selectors. */
+        div[role="dialog"],
+        div[data-testid="stDialog"] {{
+            position: fixed !important;
+            inset: 0 !important;
             width: 100vw !important;
             height: 100vh !important;
             max-width: 100vw !important;
             max-height: 100vh !important;
-            top: 0 !important;
-            left: 0 !important;
             margin: 0 !important;
             padding: 0 !important;
         }}
-        div[role="dialog"] > div:nth-child(2) {{
+        div[role="dialog"] > div,
+        div[data-testid="stDialog"] > div {{
             height: 100vh !important;
-            width: 100vw !important;
             max-height: 100vh !important;
         }}
-        /* Target the table containers specifically with vh units to override inline heights */
-        div[role="dialog"] [data-testid="stDataFrame"],
-        div[role="dialog"] [data-testid="stDataFrame"] > div,
-        div[role="dialog"] [data-testid="stDataFrame"] .stDataFrame,
-        div[role="dialog"] [data-testid="stDataFrame"] .stDataFrame > div,
+        /* Give the grid editor almost the entire viewport height so fullscreen isn't half-blank. */
         div[role="dialog"] [data-testid="stDataFrameResizable"],
         div[role="dialog"] .glideDataEditor,
         div[role="dialog"] [role="grid"],
-        div[role="dialog"] canvas {{
+        div[data-testid="stDialog"] [data-testid="stDataFrameResizable"],
+        div[data-testid="stDialog"] .glideDataEditor,
+        div[data-testid="stDialog"] [role="grid"] {{
+            height: calc(100vh - 6rem) !important;
+            max-height: calc(100vh - 6rem) !important;
             width: 98vw !important;
             max-width: 98vw !important;
-            height: 90vh !important;
-            max-height: 90vh !important;
             margin: 0 auto !important;
         }}
-        /* Also target any custom table classes */
         div[role="dialog"] [data-testid="stTable"],
-        div[role="dialog"] [data-testid="stTable"] > div {{
-            height: 90vh !important;
+        div[data-testid="stDialog"] [data-testid="stTable"] {{
+            height: calc(100vh - 6rem) !important;
+            max-height: calc(100vh - 6rem) !important;
             width: 98vw !important;
+            max-width: 98vw !important;
+            margin: 0 auto !important;
         }}
         </style>
 

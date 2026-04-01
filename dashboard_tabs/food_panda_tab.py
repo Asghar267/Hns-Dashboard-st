@@ -19,6 +19,14 @@ from modules.foodpanda_reconciliation import (
     reconcile_foodpanda_orders,
 )
 
+HIDE_EXTERNAL_REF_COLS = {"external_ref_type", "external_ref_id"}
+
+
+def _drop_hidden_cols(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    return df.drop(columns=[c for c in HIDE_EXTERNAL_REF_COLS if c in df.columns], errors="ignore")
+
 
 @st.cache_data(ttl=DatabaseConfig.CACHE_TTL)
 def _cached_food_panda_sales(
@@ -136,14 +144,14 @@ class FoodPandaTab:
         search = st.text_input("Search (employee / branch / comments / ref)", value="", key="food_panda_search")
         show_all_cols = st.checkbox("Show all columns", value=False, key="food_panda_show_all_cols")
 
-        out = df.copy()
+        out = _drop_hidden_cols(df.copy())
         if search.strip():
             needle = search.strip()
             mask = (
                 out["employee_name"].astype(str).str.contains(needle, case=False, na=False)
                 | out["shop_name"].astype(str).str.contains(needle, case=False, na=False)
                 | out.get("Additional_Comments", "").astype(str).str.contains(needle, case=False, na=False)
-                | out.get("external_ref_id", "").astype(str).str.contains(needle, case=False, na=False)
+                | out.get("order_code", "").astype(str).str.contains(needle, case=False, na=False)
             )
             out = out[mask].copy()
 
@@ -156,11 +164,12 @@ class FoodPandaTab:
             "net_amount",
             "adjustment_comments",
             "Additional_Comments",
-            "external_ref_type",
-            "external_ref_id",
             "sale_id",
         ]
-        cols = list(out.columns) if show_all_cols else [c for c in default_cols if c in out.columns]
+        if show_all_cols:
+            cols = [c for c in out.columns if c not in HIDE_EXTERNAL_REF_COLS]
+        else:
+            cols = [c for c in default_cols if c in out.columns]
 
         out_show = out[cols].copy()
         if "sale_date" in out_show.columns:
@@ -170,9 +179,10 @@ class FoodPandaTab:
 
         st.dataframe(out_show, width="stretch", hide_index=True, height=520)
 
+        df_export = _drop_hidden_cols(df.copy())
         st.download_button(
             label="Download Food Panda Excel",
-            data=export_to_excel(df, "Food Panda"),
+            data=export_to_excel(df_export, "Food Panda"),
             file_name=f"food_panda_{self.start_date}_to_{self.end_date}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
@@ -222,6 +232,12 @@ class FoodPandaTab:
 
         result = reconcile_foodpanda_orders(df_excel=df_excel, df_db=df_db, tolerance_pkr=tol)
 
+        # Hide noisy integration columns from reconciliation views/exports.
+        full = _drop_hidden_cols(result.full.copy())
+        mismatches = _drop_hidden_cols(result.mismatches.copy())
+        unmatched = _drop_hidden_cols(result.unmatched.copy())
+        duplicates = _drop_hidden_cols(result.duplicates.copy())
+
         # Summary metrics
         metrics = {r["metric"]: r["value"] for r in result.summary.to_dict("records")}
         c1, c2, c3, c4, c5 = st.columns(5)
@@ -233,28 +249,28 @@ class FoodPandaTab:
 
         st.markdown("---")
         st.subheader("Matched Only")
-        matched_only = result.full[result.full["match_status"].isin(["matched_ok", "duplicate_resolved"])].copy()
+        matched_only = full[full["match_status"].isin(["matched_ok", "duplicate_resolved"])].copy()
         st.dataframe(matched_only, width="stretch", hide_index=True, height=320)
 
         st.subheader("Mismatches")
-        st.dataframe(result.mismatches, width="stretch", hide_index=True, height=260)
+        st.dataframe(mismatches, width="stretch", hide_index=True, height=260)
 
         st.subheader("Unmatched")
-        st.dataframe(result.unmatched, width="stretch", hide_index=True, height=260)
+        st.dataframe(unmatched, width="stretch", hide_index=True, height=260)
 
         st.subheader("Duplicates (Audit)")
-        st.dataframe(result.duplicates, width="stretch", hide_index=True, height=260)
+        st.dataframe(duplicates, width="stretch", hide_index=True, height=260)
 
         st.subheader("Full Reconciliation")
-        st.dataframe(result.full, width="stretch", hide_index=True, height=420)
+        st.dataframe(full, width="stretch", hide_index=True, height=420)
 
         from modules.utils import export_tables_to_excel
         tables = {
-            "recon_full": result.full,
+            "recon_full": full,
             "matched_only": matched_only,
-            "mismatches": result.mismatches,
-            "unmatched": result.unmatched,
-            "duplicates": result.duplicates,
+            "mismatches": mismatches,
+            "unmatched": unmatched,
+            "duplicates": duplicates,
             "summary": result.summary,
         }
         st.download_button(
