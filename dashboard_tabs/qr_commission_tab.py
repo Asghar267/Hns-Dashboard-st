@@ -1219,6 +1219,14 @@ class QRCommissionTab:
                 how="left",
             )
 
+        # SQL aggregates can come back as Decimal/object; normalize early so pandas ops like .clip work.
+        if "total_sales_all" in merged.columns:
+            merged["total_sales_all"] = pd.to_numeric(merged["total_sales_all"], errors="coerce").fillna(0.0)
+        if "total_transactions_all" in merged.columns:
+            merged["total_transactions_all"] = (
+                pd.to_numeric(merged["total_transactions_all"], errors="coerce").fillna(0).astype(int)
+            )
+
         # Handle suffix fallback if any legacy merge created _x/_y columns.
         if "total_sales_blinkco" not in merged.columns:
             if "total_sales_blinkco_y" in merged.columns:
