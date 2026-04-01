@@ -172,7 +172,9 @@ def build_split_report(
         - merged["total_transactions_blinkco"]
     ).clip(lower=0)
 
-    total_den = merged["total_sales_all"].replace(0, pd.NA)
+    # Use NaN (not pd.NA) to keep float dtype; pd.NA can force object dtype and
+    # later .round() will fail with "Expected numeric dtype, got object instead."
+    total_den = merged["total_sales_all"].replace(0, float("nan"))
     merged["blinkco_share_pct"] = (merged["total_sales_blinkco"] / total_den * 100).fillna(0).round(2)
     merged["without_blinkco_share_pct"] = (merged["total_sales_without_blinkco"] / total_den * 100).fillna(0).round(2)
     merged["diff_total_minus_blinkco"] = merged["total_sales_all"] - merged["total_sales_blinkco"]
