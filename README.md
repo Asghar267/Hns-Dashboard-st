@@ -62,6 +62,24 @@ HNS_Deshboard/
 
 3. **SQL Server Drivers**: Ensure SQL Server ODBC drivers are installed on the system
 
+## Run Locally
+
+1. **Create and activate a virtual environment** (optional but recommended):
+   ```bash
+   python -m venv .venv
+   .venv\Scripts\activate
+   ```
+
+2. **Install dependencies**:
+   ```bash
+   pip install streamlit pandas plotly pyodbc
+   ```
+
+3. **Start the app**:
+   ```bash
+   streamlit run hns_dashboard_modular.py
+   ```
+
 ### Setup
 
 1. **Clone or download** the dashboard files to your local machine
