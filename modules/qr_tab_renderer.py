@@ -903,7 +903,12 @@ def render_khadda_diagnostics_tab(
                         ]
                     )
 
-                combined_sum = pd.concat([qr_ext_sum, fixed_sum], ignore_index=True)
+                # Avoid pandas FutureWarning about concat with empty/all-NA frames affecting dtype inference.
+                frames = []
+                for _df in (qr_ext_sum, fixed_sum):
+                    if isinstance(_df, pd.DataFrame) and not _df.empty:
+                        frames.append(_df)
+                combined_sum = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
                 if combined_sum.empty:
                     st.info("No employee totals available for selected range.")
                 else:

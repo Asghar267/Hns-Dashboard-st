@@ -579,14 +579,20 @@ def create_forecast_with_ci(df_history: pd.DataFrame, periods_ahead: int = 7, me
 
     # Simple linear trend forecast on last window (default / fallback)
     window = min(len(y), 30)
-    y_recent = y.iloc[-window:]
+    y_recent = pd.to_numeric(y.iloc[-window:], errors="coerce")
     x_numeric = np.arange(len(y_recent))
     # Linear fit
     try:
-        coefs = np.polyfit(x_numeric, y_recent.values, 1)
-        slope, intercept = coefs[0], coefs[1]
+        finite_mask = np.isfinite(y_recent.values)
+        if int(finite_mask.sum()) >= 2:
+            coefs = np.polyfit(x_numeric[finite_mask], y_recent.values[finite_mask], 1)
+            slope, intercept = float(coefs[0]), float(coefs[1])
+        else:
+            slope = 0.0
+            intercept = float(np.nanmean(y_recent.values)) if int(finite_mask.sum()) >= 1 else 0.0
     except Exception:
-        slope, intercept = 0, float(y_recent.mean())
+        slope = 0.0
+        intercept = float(np.nanmean(y_recent.values)) if np.isfinite(np.nanmean(y_recent.values)) else 0.0
 
     # Forecast points
     future_idx = np.arange(len(y_recent), len(y_recent) + periods_ahead)
