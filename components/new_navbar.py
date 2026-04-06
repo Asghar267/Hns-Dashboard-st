@@ -15,16 +15,29 @@ class NewNavbarComponent:
             user_allowed_tabs = user_record.get('allowed_tabs', 'all') if user_record else 'all'
         hidden_labels = {"Indoge-First Diagnostics", "Multi-Signal Match"}
 
+        alias_allowed = {
+            "Admin & Snapshots": {"User Management"},
+        }
+
         display_tabs = []
         for label, info in tabs_config.items():
             if label in hidden_labels:
                 continue
             if info.get('admin_only', False) and (not user_record or user_record.get('role', 'user').lower() != 'admin'):
                 continue
-            if user_allowed_tabs == 'all' or label in user_allowed_tabs:
-                key = label.lower().replace(' ', '_').replace('&', '')
+            allowed_by_label = user_allowed_tabs == 'all' or label in user_allowed_tabs
+            if not allowed_by_label and isinstance(user_allowed_tabs, list):
+                aliases = alias_allowed.get(label, set())
+                if aliases and any(a in user_allowed_tabs for a in aliases):
+                    allowed_by_label = True
+
+            if allowed_by_label:
                 if label == "Category Filters & Coverage":
                     key = "category_filters_&_coverage"
+                elif label == "Admin & Snapshots":
+                    key = "admin_snapshots"
+                else:
+                    key = label.lower().replace(' ', '_').replace('&', '')
                 if any(t['key'] == key for t in display_tabs):
                     continue
                 display_tabs.append({

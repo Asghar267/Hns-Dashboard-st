@@ -1907,47 +1907,48 @@ def get_cached_targets(
                 except Exception:
                     pass
 
-        # Chef targets
-        if chef_table is None:
-            _warn_once(
-                "warn_missing_chef_targets",
-                "Chef targets table `branch_chef_targets` not found; Chef Targets tab will show empty targets.",
-            )
-            df_chef_targets = pd.DataFrame()
-        else:
-            try:
-                if _table_supports_period_filters(conn, chef_table):
-                    df_chef_targets = pd.read_sql(
-                        f"SELECT shop_id, category_id, monthly_target as target_amount, target_type FROM {chef_table} WHERE target_year = ? AND target_month = ?",
-                        conn,
-                        params=(year, month),
-                    )
-                elif _table_supports_target_date(conn, chef_table):
-                    df_chef_targets = pd.read_sql(
-                        f"SELECT shop_id, category_id, monthly_target as target_amount, target_type FROM {chef_table} WHERE target_date = ?",
-                        conn,
-                        params=(date(year, month, 1),),
-                    )
-                    _warn_once(
-                        "warn_chef_targets_no_period_cols",
-                        "branch_chef_targets is missing target_year/target_month; filtering by target_date instead.",
-                    )
-                else:
-                    df_chef_targets = pd.read_sql(
-                        f"SELECT shop_id, category_id, monthly_target as target_amount, target_type FROM {chef_table}",
-                        conn,
-                    )
-                    _warn_once(
-                        "warn_chef_targets_no_period_cols",
-                        "branch_chef_targets is missing period columns; using unfiltered targets table.",
-                    )
-            except Exception as e:
+            # Chef targets
+            if chef_table is None:
                 _warn_once(
-                    "warn_chef_targets_query_failed",
-                    f"Failed to read branch_chef_targets ({e}); Chef Targets will be empty.",
+                    "warn_missing_chef_targets",
+                    "Chef targets table `branch_chef_targets` not found; Chef Targets tab will show empty targets.",
                 )
                 df_chef_targets = pd.DataFrame()
+            else:
+                try:
+                    if _table_supports_period_filters(conn, chef_table):
+                        df_chef_targets = pd.read_sql(
+                            f"SELECT shop_id, category_id, monthly_target as target_amount, target_type FROM {chef_table} WHERE target_year = ? AND target_month = ?",
+                            conn,
+                            params=(year, month),
+                        )
+                    elif _table_supports_target_date(conn, chef_table):
+                        df_chef_targets = pd.read_sql(
+                            f"SELECT shop_id, category_id, monthly_target as target_amount, target_type FROM {chef_table} WHERE target_date = ?",
+                            conn,
+                            params=(date(year, month, 1),),
+                        )
+                        _warn_once(
+                            "warn_chef_targets_no_period_cols",
+                            "branch_chef_targets is missing target_year/target_month; filtering by target_date instead.",
+                        )
+                    else:
+                        df_chef_targets = pd.read_sql(
+                            f"SELECT shop_id, category_id, monthly_target as target_amount, target_type FROM {chef_table}",
+                            conn,
+                        )
+                        _warn_once(
+                            "warn_chef_targets_no_period_cols",
+                            "branch_chef_targets is missing period columns; using unfiltered targets table.",
+                        )
+                except Exception as e:
+                    _warn_once(
+                        "warn_chef_targets_query_failed",
+                        f"Failed to read branch_chef_targets ({e}); Chef Targets will be empty targets.",
+                    )
+                    df_chef_targets = pd.DataFrame()
 
+            # Local overrides (e.g., April 2026 targets) merged on top of DB targets.
         # OT targets
         if ot_table is None:
             _warn_once(
@@ -2162,27 +2163,27 @@ def get_cached_unmapped_products(
 
     query = f"""
     SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
-	    SELECT
-	        li.Product_code,
-	        COALESCE(p.item_name, '(Unknown)') AS Product_name,
-	        SUM(li.qty) AS total_qty,
-	        SUM((li.qty * li.Unit_price) / NULLIF(st.line_total, 0) * s.Nt_amount) AS total_sales
-	    FROM tblSales s WITH (NOLOCK)
-	    JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
-	    LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
-	    LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.Product_ID
-	    LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
-	    JOIN (
-	        SELECT sale_id, SUM(qty * Unit_price) AS line_total
-	        FROM tblSalesLineItems WITH (NOLOCK)
-	        GROUP BY sale_id
-	    ) st ON st.sale_id = s.sale_id
-	    WHERE s.sale_date BETWEEN ? AND ?
-	        AND s.shop_id IN ({placeholders(len(branch_ids))})
-	        AND (t.field_name IS NULL OR t.field_name = '' OR t.field_name = '(Unmapped)')
-	    GROUP BY li.Product_code, COALESCE(p.item_name, '(Unknown)')
-	    ORDER BY total_sales DESC
-	    """
+        SELECT
+            li.Product_code,
+            COALESCE(p.item_name, '(Unknown)') AS Product_name,
+            SUM(li.qty) AS total_qty,
+            SUM((li.qty * li.Unit_price) / NULLIF(st.line_total, 0) * s.Nt_amount) AS total_sales
+        FROM tblSales s WITH (NOLOCK)
+        JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
+        LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
+        LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.Product_ID
+        LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
+        JOIN (
+            SELECT sale_id, SUM(qty * Unit_price) AS line_total
+            FROM tblSalesLineItems WITH (NOLOCK)
+            GROUP BY sale_id
+        ) st ON st.sale_id = s.sale_id
+        WHERE s.sale_date BETWEEN ? AND ?
+            AND s.shop_id IN ({placeholders(len(branch_ids))})
+            AND (t.field_name IS NULL OR t.field_name = '' OR t.field_name = '(Unmapped)')
+        GROUP BY li.Product_code, COALESCE(p.item_name, '(Unknown)')
+        ORDER BY total_sales DESC
+        """
     
     params = [start_date, end_date] + branch_ids
     

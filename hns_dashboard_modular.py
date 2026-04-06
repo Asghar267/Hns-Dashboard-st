@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import time
 import threading
+import json
 from datetime import date, datetime
-from typing import List
+from pathlib import Path
+from typing import List, Dict, Any
 
 import pandas as pd
 import streamlit as st
@@ -249,104 +251,307 @@ def load_custom_css() -> None:
     """, unsafe_allow_html=True)
 
 
+SNAPSHOT_SETTINGS_PATH = Path("config") / "snapshot_settings.json"
+SNAPSHOT_SETTINGS_DEFAULTS: Dict[str, bool] = {
+    "branch_cards": True,
+    "all_products_by_branch": True,
+    "qr_employee_no_sales": True,
+    "qr_employee_with_sales": True,
+    "ramzan_deals": True,
+    "material_cost_commission": True,
+    "khadda_diagnostics": True,
+}
+
+
+def load_snapshot_settings() -> Dict[str, bool]:
+    try:
+        if SNAPSHOT_SETTINGS_PATH.exists():
+            data = json.loads(SNAPSHOT_SETTINGS_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                out = SNAPSHOT_SETTINGS_DEFAULTS.copy()
+                out.update({k: bool(v) for k, v in data.items() if k in out})
+                return out
+    except Exception:
+        pass
+    return SNAPSHOT_SETTINGS_DEFAULTS.copy()
+
+
+def save_snapshot_settings(settings: Dict[str, Any]) -> None:
+    data = SNAPSHOT_SETTINGS_DEFAULTS.copy()
+    if isinstance(settings, dict):
+        for k in data.keys():
+            if k in settings:
+                data[k] = bool(settings[k])
+    SNAPSHOT_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SNAPSHOT_SETTINGS_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(SNAPSHOT_SETTINGS_PATH)
+
+
 def render_user_management_tab(branch_name_map: dict) -> None:
-    st.header("User Management")
-    st.caption("Manage users, branch access, and tab/table visibility.")
+    st.header("Admin & Snapshots")
+    st.caption("Manage users, access controls, and snapshot generation/viewing.")
 
-    users = list_users()
-    if users:
-        df_users = pd.DataFrame(users)
-        for col in ["allowed_branches", "allowed_tabs", "allowed_tables"]:
-            if col in df_users.columns:
-                df_users[col] = df_users[col].apply(lambda v: str(v))
-        st.subheader("Current Users")
-        st.dataframe(df_users, width="stretch", hide_index=True, height=240)
+    ui_users, ui_snaps = st.tabs(["Users", "Snapshots"])
 
-    tab_options = [
-        "Overview", "Order Takers", "Chef Sales", "Chef Targets", "Food Panda", "OT Targets",
-        "QR Commission", "Khadda Diagnostics", "Material Cost Commission",
-        "Trends & Analytics", "Ramzan Deals", "Category Filters & Coverage", "Pivot Tables",
-    ]
-    qr_table_options = [
-        "Split Report", "Detailed Transactions", "Employee Totals",
-        "Employee Totals (No Sales/Candelahns)",
-        "Employee Pivot", "Branch Totals", "Product-wise Commission", "Data Quality",
-    ]
+    with ui_users:
+        users = list_users()
+        usernames = [u.get("username") for u in users if u.get("username")]
 
-    usernames = [u.get("username") for u in users if u.get("username")]
-    if "user_mgmt_selected" not in st.session_state:
-        st.session_state.user_mgmt_selected = "<new>"
-
-    with st.form("user_select_form"):
-        selected = st.selectbox(
-            "Select user to edit",
-            ["<new>"] + usernames,
-            index=(["<new>"] + usernames).index(st.session_state.user_mgmt_selected)
-            if st.session_state.user_mgmt_selected in (["<new>"] + usernames) else 0,
-            key="user_mgmt_select",
-        )
-        load_user = st.form_submit_button("Load User", width="stretch")
-        if load_user:
-            st.session_state.user_mgmt_selected = selected
-
-    selected = st.session_state.user_mgmt_selected
-    existing = next((u for u in users if u.get("username") == selected), None) if selected != "<new>" else None
-
-    with st.form("user_management_form"):
-        username = st.text_input("Username", value=existing.get("username") if existing else "", disabled=bool(existing), autocomplete="username")
-        password = st.text_input("Password (leave blank to keep)", type="password", value="", autocomplete="new-password")
-        role = st.selectbox("Role", ["user", "admin"], index=0 if not existing or existing.get("role") != "admin" else 1)
-
-        all_branches = st.checkbox("Allow all branches", value=existing.get("allowed_branches") == "all" if existing else False)
-        branch_ids = list(branch_name_map.keys()) if branch_name_map else SELECTED_BRANCH_IDS
-        allowed_branches = st.multiselect(
-            "Allowed Branches", options=branch_ids,
-            default=branch_ids if all_branches else (existing.get("allowed_branches") or [] if existing else []),
-            format_func=lambda x: branch_name_map.get(int(x), f"Branch {x}"), disabled=all_branches,
-        )
-
-        all_tabs = st.checkbox("Allow all tabs", value=existing.get("allowed_tabs") == "all" if existing else False)
-        allowed_tabs = st.multiselect(
-            "Allowed Tabs", options=tab_options,
-            default=tab_options if all_tabs else (existing.get("allowed_tabs") or [] if existing else []),
-            disabled=all_tabs,
-        )
-
-        show_qr_tables = all_tabs or ("QR Commission" in allowed_tabs)
-        all_qr_tables = st.checkbox(
-            "Allow all QR tables",
-            value=(existing.get("allowed_tables", {}).get("QR Commission") == "all") if existing else False,
-            disabled=not show_qr_tables,
-        )
-        allowed_qr_tables = st.multiselect(
-            "Allowed QR Tables", options=qr_table_options,
-            default=qr_table_options if all_qr_tables else (existing.get("allowed_tables", {}).get("QR Commission", []) if existing else []),
-            disabled=not show_qr_tables or all_qr_tables,
-        )
-
-        submitted = st.form_submit_button("Save User", width="stretch")
-        if submitted:
-            if not username:
-                st.error("Username is required.")
+        with st.expander("Current Users", expanded=False):
+            if users:
+                df_users = pd.DataFrame(users)
+                for col in ["allowed_branches", "allowed_tabs", "allowed_tables"]:
+                    if col in df_users.columns:
+                        df_users[col] = df_users[col].apply(lambda v: str(v))
+                st.dataframe(df_users, width="stretch", hide_index=True, height=260)
             else:
-                record = existing.copy() if existing else {}
-                record["username"] = username
-                record["role"] = role
-                record["allowed_branches"] = "all" if all_branches else allowed_branches
-                record["allowed_tabs"] = "all" if all_tabs else allowed_tabs
-                record["allowed_tables"] = {"QR Commission": "all" if all_qr_tables else allowed_qr_tables}
-                if password:
-                    record["password_hash"] = hash_password(password)
-                elif not existing:
-                    st.error("Password is required for new users.")
-                    return
-                upsert_user(record)
-                st.success("User saved.")
+                st.info("No users found yet.")
 
-    if existing and existing.get("username"):
-        if st.button("Delete User", width="stretch"):
-            delete_user(existing.get("username"))
-            st.success("User deleted.")
+        tab_options = [
+            "Overview", "Order Takers", "Chef Sales", "Chef Targets", "Food Panda", "OT Targets",
+            "QR Commission", "Khadda Diagnostics", "Material Cost Commission",
+            "Trends & Analytics", "Ramzan Deals", "Category Filters & Coverage", "Pivot Tables",
+            "Admin & Snapshots",
+        ]
+        qr_table_options = [
+            "Split Report", "Detailed Transactions", "Employee Totals",
+            "Employee Totals (No Sales/Candelahns)",
+            "Employee Pivot", "Branch Totals", "Product-wise Commission", "Data Quality",
+        ]
+
+        if "user_mgmt_selected" not in st.session_state:
+            st.session_state.user_mgmt_selected = "<new>"
+
+        sel_col, form_col = st.columns([0.45, 0.55], gap="large")
+        with sel_col:
+            st.subheader("Select User")
+            with st.form("user_select_form"):
+                selected = st.selectbox(
+                    "User",
+                    ["<new>"] + usernames,
+                    index=(["<new>"] + usernames).index(st.session_state.user_mgmt_selected)
+                    if st.session_state.user_mgmt_selected in (["<new>"] + usernames) else 0,
+                    key="user_mgmt_select",
+                    help="Load an existing user or create a new one.",
+                )
+                load_user = st.form_submit_button("Load", width="stretch")
+                if load_user:
+                    st.session_state.user_mgmt_selected = selected
+
+        selected = st.session_state.user_mgmt_selected
+        existing = next((u for u in users if u.get("username") == selected), None) if selected != "<new>" else None
+
+        with form_col:
+            st.subheader("User Details")
+            with st.form("user_management_form"):
+                username = st.text_input(
+                    "Username",
+                    value=existing.get("username") if existing else "",
+                    disabled=bool(existing),
+                    autocomplete="username",
+                )
+                password = st.text_input("Password (leave blank to keep)", type="password", value="", autocomplete="new-password")
+                role = st.selectbox("Role", ["user", "admin"], index=0 if not existing or existing.get("role") != "admin" else 1)
+
+                st.markdown("**Access**")
+                all_branches = st.checkbox("Allow all branches", value=existing.get("allowed_branches") == "all" if existing else False)
+                branch_ids = list(branch_name_map.keys()) if branch_name_map else SELECTED_BRANCH_IDS
+                allowed_branches = st.multiselect(
+                    "Branches",
+                    options=branch_ids,
+                    default=branch_ids if all_branches else (existing.get("allowed_branches") or [] if existing else []),
+                    format_func=lambda x: branch_name_map.get(int(x), f"Branch {x}"),
+                    disabled=all_branches,
+                )
+
+                all_tabs = st.checkbox("Allow all tabs", value=existing.get("allowed_tabs") == "all" if existing else False)
+                existing_tabs = existing.get("allowed_tabs") if existing else []
+                if isinstance(existing_tabs, list):
+                    normalized_tabs = list(existing_tabs)
+                    if "User Management" in normalized_tabs and "Admin & Snapshots" not in normalized_tabs:
+                        normalized_tabs = [t for t in normalized_tabs if t != "User Management"] + ["Admin & Snapshots"]
+                    existing_tabs = normalized_tabs
+                allowed_tabs = st.multiselect(
+                    "Tabs",
+                    options=tab_options,
+                    default=tab_options if all_tabs else (existing_tabs or []),
+                    disabled=all_tabs,
+                )
+
+                show_qr_tables = all_tabs or ("QR Commission" in allowed_tabs)
+                all_qr_tables = st.checkbox(
+                    "Allow all QR tables",
+                    value=(existing.get("allowed_tables", {}).get("QR Commission") == "all") if existing else False,
+                    disabled=not show_qr_tables,
+                )
+                allowed_qr_tables = st.multiselect(
+                    "QR Tables",
+                    options=qr_table_options,
+                    default=qr_table_options if all_qr_tables else (existing.get("allowed_tables", {}).get("QR Commission", []) if existing else []),
+                    disabled=not show_qr_tables or all_qr_tables,
+                )
+
+                submitted = st.form_submit_button("Save User", width="stretch")
+                if submitted:
+                    if not username:
+                        st.error("Username is required.")
+                    else:
+                        record = existing.copy() if existing else {}
+                        record["username"] = username
+                        record["role"] = role
+                        record["allowed_branches"] = "all" if all_branches else allowed_branches
+                        cleaned_tabs = [t for t in allowed_tabs if t != "User Management"]
+                        record["allowed_tabs"] = "all" if all_tabs else cleaned_tabs
+                        record["allowed_tables"] = {"QR Commission": "all" if all_qr_tables else allowed_qr_tables}
+                        if password:
+                            record["password_hash"] = hash_password(password)
+                        elif not existing:
+                            st.error("Password is required for new users.")
+                            return
+                        upsert_user(record)
+                        st.success("User saved.")
+
+            if existing and existing.get("username"):
+                if st.button("Delete User", width="stretch"):
+                    delete_user(existing.get("username"))
+                    st.success("User deleted.")
+
+    with ui_snaps:
+        st.subheader("Snapshots")
+        st.caption("Saved settings are used by the sidebar **Generate Snapshots** button.")
+
+        left, right = st.columns([0.42, 0.58], gap="large")
+
+        with left:
+            st.markdown("**Generation Settings**")
+            st.caption("Enable/disable sections once; the choice is remembered.")
+
+            current = load_snapshot_settings()
+            settings_meta = [
+                ("branch_cards", "Branch performance cards"),
+                ("all_products_by_branch", "All products by branch"),
+                ("qr_employee_no_sales", "QR employees (No Sales/Candelahns)"),
+                ("qr_employee_with_sales", "QR employees (with Sales)"),
+                ("ramzan_deals", "Ramzan deals"),
+                ("material_cost_commission", "Material cost commission"),
+                ("khadda_diagnostics", "Khadda diagnostics"),
+            ]
+
+            btn1, btn2 = st.columns(2)
+            with btn1:
+                if st.button("Enable All", width="stretch", key="snap_enable_all"):
+                    current = {k: True for k in SNAPSHOT_SETTINGS_DEFAULTS.keys()}
+                    save_snapshot_settings(current)
+                    st.success("Enabled all sections.")
+                    st.rerun()
+            with btn2:
+                if st.button("Disable All", width="stretch", key="snap_disable_all"):
+                    current = {k: False for k in SNAPSHOT_SETTINGS_DEFAULTS.keys()}
+                    save_snapshot_settings(current)
+                    st.success("Disabled all sections.")
+                    st.rerun()
+
+            with st.form("snapshot_settings_form", clear_on_submit=False):
+                new_settings: Dict[str, bool] = {}
+                for key, label in settings_meta:
+                    new_settings[key] = st.checkbox(label, value=bool(current.get(key, True)))
+                save = st.form_submit_button("Save Settings", width="stretch")
+                if save:
+                    save_snapshot_settings(new_settings)
+                    st.success("Snapshot settings saved.")
+
+            if SNAPSHOT_SETTINGS_PATH.exists():
+                ts = datetime.fromtimestamp(SNAPSHOT_SETTINGS_PATH.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                st.caption(f"Last saved: {ts}")
+
+        with right:
+            st.markdown("**Snapshot Viewer**")
+            base_dir = Path("HNS_Deshboard") / "snapshots"
+            if not base_dir.exists():
+                st.info("No snapshots folder found yet. Generate snapshots from the sidebar first.")
+                return
+
+            folders = [p for p in base_dir.iterdir() if p.is_dir()]
+            folders = sorted(folders, key=lambda p: p.stat().st_mtime, reverse=True)
+            if not folders:
+                st.info("No snapshots generated yet.")
+                return
+
+            selected_folder = st.selectbox("Run", folders, format_func=lambda p: p.name)
+            st.caption(f"Path: {selected_folder}")
+            params_path = selected_folder / "run_params.json"
+            params = {}
+            if params_path.exists():
+                try:
+                    params = json.loads(params_path.read_text(encoding="utf-8"))
+                except Exception:
+                    params = {}
+
+            if params:
+                m1, m2, m3, m4 = st.columns(4)
+                with m1:
+                    st.metric("Start", str(params.get("start_date", "")) or "-")
+                with m2:
+                    st.metric("End", str(params.get("end_date", "")) or "-")
+                with m3:
+                    st.metric("Mode", str(params.get("data_mode", "")) or "-")
+                with m4:
+                    st.metric("Branches", str(len(params.get("branches", []) or [])))
+                ga = str(params.get("generated_at", "") or "").strip()
+                if ga:
+                    st.caption(f"Generated at: {ga}")
+
+            section_dirs = [p for p in selected_folder.iterdir() if p.is_dir()]
+            section_dirs = sorted(section_dirs, key=lambda p: p.name)
+            section_labels = ["(root)"] + [p.name for p in section_dirs]
+            selected_section = st.selectbox("Section", section_labels)
+            browse_dir = selected_folder if selected_section == "(root)" else (selected_folder / selected_section)
+
+            try:
+                all_files = [p for p in browse_dir.rglob("*") if p.is_file()]
+                images_count = sum(1 for p in all_files if p.suffix.lower() == ".png")
+                csv_count = sum(1 for p in all_files if p.suffix.lower() == ".csv")
+                json_count = sum(1 for p in all_files if p.suffix.lower() == ".json")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.metric("PNGs", str(images_count))
+                with c2:
+                    st.metric("CSVs", str(csv_count))
+                with c3:
+                    st.metric("JSON", str(json_count))
+            except Exception:
+                pass
+
+            name_filter = st.text_input("Filter files", value="", placeholder="Type to filter by filename…")
+            files = [p for p in browse_dir.iterdir() if p.is_file() and p.suffix.lower() in {".png", ".csv", ".json"}]
+            files = sorted(files, key=lambda p: p.name)
+            if name_filter.strip():
+                nf = name_filter.strip().lower()
+                files = [p for p in files if nf in p.name.lower()]
+
+            if not files:
+                st.info("No files found for this section/filter.")
+                return
+
+            chosen = st.selectbox("File", files, format_func=lambda p: p.name)
+            st.caption(f"Selected: {chosen.name}")
+            if chosen.suffix.lower() == ".png":
+                st.image(str(chosen), use_container_width=True)
+                st.download_button("Download PNG", data=chosen.read_bytes(), file_name=chosen.name, mime="image/png")
+            elif chosen.suffix.lower() == ".csv":
+                try:
+                    df = pd.read_csv(chosen)
+                    st.dataframe(df, width="stretch", hide_index=True, height=520)
+                except Exception as e:
+                    st.error(f"Could not read CSV: {e}")
+                st.download_button("Download CSV", data=chosen.read_bytes(), file_name=chosen.name, mime="text/csv")
+            elif chosen.suffix.lower() == ".json":
+                try:
+                    st.json(json.loads(chosen.read_text(encoding="utf-8")))
+                except Exception as e:
+                    st.error(f"Could not read JSON: {e}")
+                st.download_button("Download JSON", data=chosen.read_bytes(), file_name=chosen.name, mime="application/json")
 
 
 def main() -> None:
@@ -419,16 +624,15 @@ def main() -> None:
          "This Month", "Last Month", "This Quarter", "This Year"],
     )
 
+    # Presets come from `get_date_presets`; do not override them here.
+    # The selected start/end are also used by snapshot generation, so this must remain consistent.
     start_date, end_date = get_date_presets(date_preset)
-
-    if date_preset != "Custom":
-        today = date.today()
-        start_date = date(today.year, today.month, 1)
-        end_date = today
 
     if date_preset == "Custom":
         start_date = st.sidebar.date_input("Start Date", start_date)
         end_date = st.sidebar.date_input("End Date", end_date)
+    else:
+        st.sidebar.caption(f"Using preset range: {start_date} → {end_date}")
 
     if start_date > end_date:
         st.sidebar.error("Start Date cannot be after End Date")
@@ -533,11 +737,13 @@ def main() -> None:
         with st.spinner("Generating snapshots..."):
             try:
                 from daily_branch_snapshots import generate_snapshots
+                snap_settings = load_snapshot_settings()
                 out_dir = generate_snapshots(
                     start_date=start_date_str, end_date=end_date_str,
                     target_year=target_year, target_month=target_month,
                     branches=selected_branches, data_mode=data_mode,
                     output_dir="HNS_Deshboard/snapshots",
+                    enabled_sections=snap_settings,
                 )
                 st.sidebar.success(f"Saved to {out_dir.name}")
             except Exception as e:
@@ -581,6 +787,14 @@ def main() -> None:
         allowed_tabs = "all"
 
     df_line_item = None
+
+    def _nav_key_from_label(label: str) -> str:
+        # Keep this aligned with components/new_navbar.py normalization.
+        if label == "Category Filters & Coverage":
+            return "category_filters_&_coverage"
+        if label == "Admin & Snapshots":
+            return "admin_snapshots"
+        return label.lower().replace(" ", "_").replace("&", "")
 
     def _render_overview():
         OverviewTab(start_date_str, end_date_str, selected_branches, data_mode).render_overview()
@@ -634,6 +848,11 @@ def main() -> None:
         PivotTablesTab(start_date_str, end_date_str, selected_branches, data_mode, df_line_item).render()
 
     def _render_user_management():
+        current_user = st.session_state.get("user", {}) or {}
+        current_role = str(current_user.get("role", "user")).lower()
+        if current_role != "admin":
+            st.error("Admin & Snapshots is admin-only.")
+            return
         um_map = {2: "Khadda Main Branch", 3: "FESTIVAL", 4: "Rahat Commercial", 6: "TOWER", 8: "North Nazimabad", 10: "MALIR", 14: "FESTIVAL 2"}
         render_user_management_tab(um_map)
 
@@ -654,14 +873,29 @@ def main() -> None:
     }
     # Support legacy/double-underscore key from navbar normalization
     tab_map.setdefault('trends__analytics', _render_trends_analytics)
-
-    if role == "admin":
-        tab_map['user_management'] = _render_user_management
+    # Also support mapping by label (defensive) in case something stores labels in session.
+    tab_map.setdefault("Admin & Snapshots", _render_user_management)
+    tab_map.setdefault("admin_snapshots", _render_user_management)
+    tab_map.setdefault("User Management", _render_user_management)  # legacy label
+    tab_map.setdefault("user_management", _render_user_management)  # legacy key
 
     # Render a single active tab only (Streamlit reruns on any widget change; this avoids
     # recomputing the entire dashboard across all tabs on every interaction).
     active_key = NewNavbarComponent(navbar_config).render(user_record=user_record)
-    render_fn = tab_map.get(active_key) or tab_map.get(active_key.replace("&", "")) or _render_overview
+
+    normalized_active_key = active_key
+    try:
+        if isinstance(active_key, str):
+            normalized_active_key = _nav_key_from_label(active_key)
+    except Exception:
+        normalized_active_key = active_key
+
+    render_fn = (
+        tab_map.get(active_key)
+        or (tab_map.get(active_key.replace("&", "")) if isinstance(active_key, str) else None)
+        or tab_map.get(normalized_active_key)
+        or _render_overview
+    )
     try:
         render_fn()
     except Exception as e:

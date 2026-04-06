@@ -80,7 +80,7 @@ class AppConfig:
         "Ramzan Deals": {"icon": "moon", "description": "Ramzan special deals"},
         "Category Filters & Coverage": {"icon": "filter", "description": "Category filters and coverage"},
         "Pivot Tables": {"icon": "table", "description": "Interactive pivot tables"},
-        "User Management": {"icon": "users", "description": "Admin user management", "admin_only": True}
+        "Admin & Snapshots": {"icon": "users", "description": "Admin controls + snapshot settings/viewer", "admin_only": True}
     },
     "globals": [
         {"label": "Refresh", "icon": "refresh", "key": "refresh"},

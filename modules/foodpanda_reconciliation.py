@@ -201,6 +201,7 @@ class ReconcileResult:
     mismatches: pd.DataFrame
     unmatched: pd.DataFrame
     duplicates: pd.DataFrame
+    excel_duplicates: pd.DataFrame
     summary: pd.DataFrame
 
 
@@ -213,7 +214,7 @@ def reconcile_foodpanda_orders(
     if df_excel is None or df_excel.empty:
         empty = pd.DataFrame()
         summary = pd.DataFrame([{"metric": "total_rows", "value": 0}])
-        return ReconcileResult(empty, empty, empty, empty, summary)
+        return ReconcileResult(empty, empty, empty, empty, empty, summary)
 
     excel = df_excel.copy()
     excel_key = "excel_order_code_norm"
@@ -237,6 +238,13 @@ def reconcile_foodpanda_orders(
     if db.empty:
         out = excel.copy()
         out["match_status"] = "unmatched"
+        excel_dup_counts = excel.groupby(excel_key, dropna=False).size()
+        excel_dup_keys = set(excel_dup_counts[excel_dup_counts > 1].index.astype(str).tolist())
+        excel_dups = excel[excel[excel_key].astype(str).isin(excel_dup_keys)].copy()
+        if not excel_dups.empty:
+            excel_dups["excel_dup_count"] = excel_dups[excel_key].map(
+                excel_dup_counts.astype(int).to_dict()
+            )
         summary = pd.DataFrame(
             [
                 {"metric": "total_rows", "value": len(out)},
@@ -246,7 +254,7 @@ def reconcile_foodpanda_orders(
                 {"metric": "duplicates_in_db", "value": 0},
             ]
         )
-        return ReconcileResult(out, pd.DataFrame(), out, pd.DataFrame(), summary)
+        return ReconcileResult(out, pd.DataFrame(), out, pd.DataFrame(), excel_dups, summary)
 
     # Merge to get candidates (may produce duplicates).
     cand = excel.merge(
@@ -261,6 +269,15 @@ def reconcile_foodpanda_orders(
     dup_counts = db.groupby("db_order_code_norm")["sale_id"].nunique()
     dup_keys = set(dup_counts[dup_counts > 1].index.astype(str).tolist())
     cand["db_duplicate_key"] = cand[excel_key].astype(str).isin(dup_keys)
+
+    # Excel-side duplicates (by order code).
+    excel_dup_counts = excel.groupby(excel_key, dropna=False).size()
+    excel_dup_keys = set(excel_dup_counts[excel_dup_counts > 1].index.astype(str).tolist())
+    excel_dups = excel[excel[excel_key].astype(str).isin(excel_dup_keys)].copy()
+    if not excel_dups.empty:
+        excel_dups["excel_dup_count"] = excel_dups[excel_key].map(
+            excel_dup_counts.astype(int).to_dict()
+        )
 
     # Candidate scoring to pick best match per excel order code.
     cand["db_sale_date"] = pd.to_datetime(cand.get("sale_date"), errors="coerce")
@@ -315,5 +332,4 @@ def reconcile_foodpanda_orders(
         ]
     )
 
-    return ReconcileResult(best, mismatches, unmatched, dup_audit, summary)
-
+    return ReconcileResult(best, mismatches, unmatched, dup_audit, excel_dups, summary)

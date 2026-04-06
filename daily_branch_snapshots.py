@@ -19,6 +19,7 @@ Snapshots generated:
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
@@ -84,6 +85,16 @@ def save_figure(fig: plt.Figure, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
+
+
+def save_table_dump(df: pd.DataFrame, path: Path) -> None:
+    """Save a CSV dump of the exact data used to render a snapshot (debug/traceability)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        df.to_csv(path, index=False, encoding="utf-8-sig")
+    except Exception:
+        # Best-effort; never fail snapshot generation because of debug dump.
+        pass
 
 
 def table_image(
@@ -684,76 +695,93 @@ def fetch_qr_employee_no_sales(
     data_mode: str,
     commission_rate: float = 2.0,
 ) -> pd.DataFrame:
-    from modules.config import BLOCKED_COMMENTS, BLOCKED_NAMES
+    """
+    Snapshot helper for QR Commission "Employee Totals (No Sales/Candelahns)".
+
+    This intentionally mirrors the QR Commission tab behavior:
+    - Sale-level rows from tblSales where external_ref_type='Blinkco order'
+    - End date is inclusive (implemented as end-exclusive +1 day)
+    - Indoge totals come from parsed Blink raw JSON (tblInitialRawBlinkOrder)
+    """
+    if not branch_ids:
+        return pd.DataFrame(
+            columns=[
+                "employee_id",
+                "employee_code",
+                "employee_name",
+                "shop_id",
+                "shop_name",
+                "transaction_count",
+                "total_sale",
+                "Candelahns_commission",
+                "Indoge_total_price",
+                "Indoge_commission",
+            ]
+        )
+
+    end_exclusive = (pd.to_datetime(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+    df_qr = QRCommissionService.get_qr_commission_data(start_date, end_exclusive, branch_ids, data_mode)
+    if df_qr is None or df_qr.empty:
+        return pd.DataFrame(
+            columns=[
+                "employee_id",
+                "employee_code",
+                "employee_name",
+                "shop_id",
+                "shop_name",
+                "transaction_count",
+                "total_sale",
+                "Candelahns_commission",
+                "Indoge_total_price",
+                "Indoge_commission",
+            ]
+        )
 
     conn = pool.get_connection("candelahns")
-    base_qr = f"""
-        SELECT
-            s.shop_id,
-            sh.shop_name,
-            COALESCE(e.field_name, 'Online/Unassigned') AS employee_name,
-            SUM(s.Nt_amount) AS total_sale,
-            s.external_ref_id
-        FROM tblSales s
-        LEFT JOIN tblDefShopEmployees e ON s.employee_id = e.shop_employee_id
-        LEFT JOIN tblDefShops sh ON s.shop_id = sh.shop_id
-        WHERE s.sale_date BETWEEN ? AND ?
-          AND s.shop_id IN ({placeholders(len(branch_ids))})
-          AND s.external_ref_type = 'Blinkco order'
+    blink_q = """
+    SELECT
+        BlinkOrderId,
+        OrderJson,
+        CreatedAt
+    FROM tblInitialRawBlinkOrder
+    WHERE CreatedAt >= ? AND CreatedAt < ?
     """
-    params: List = [start_date, end_date] + branch_ids
+    df_blink_raw = pd.read_sql(blink_q, conn, params=[start_date, end_exclusive])
+    df_blink = prepare_blink_orders(df_blink_raw)
 
-    if data_mode == "Filtered":
-        if BLOCKED_NAMES:
-            base_qr += f" AND s.Cust_name NOT IN ({placeholders(len(BLOCKED_NAMES))})"
-            params.extend(BLOCKED_NAMES)
-        if BLOCKED_COMMENTS:
-            base_qr += f" AND (s.Additional_Comments NOT IN ({placeholders(len(BLOCKED_COMMENTS))}) OR s.Additional_Comments IS NULL)"
-            params.extend(BLOCKED_COMMENTS)
-
-    base_qr += """
-        GROUP BY s.shop_id, sh.shop_name, COALESCE(e.field_name, 'Online/Unassigned'), s.external_ref_id
-    """
-    blink_query = """
-        SELECT BlinkOrderId, OrderJson
-        FROM tblInitialRawBlinkOrder
-        WHERE CreatedAt >= ? AND CreatedAt < DATEADD(DAY, 1, ?)
-    """
-    df_qr = pd.read_sql(base_qr, conn, params=params)
-    df_blink = pd.read_sql(blink_query, conn, params=[start_date, end_date])
-
-    if df_qr.empty:
-        return pd.DataFrame(columns=["shop_id", "shop_name", "employee_name", "transaction_count", "QR Total Sales", "QR Commission"])
-
-    df_qr = df_qr[df_qr["employee_name"].astype(str).str.strip().str.lower() != "online/unassigned"].copy()
-
-    def extract_total(v: str) -> float:
-        import json
-        try:
-            obj = json.loads(v) if pd.notna(v) and v else {}
-            return float(obj.get("total_price", 0) or 0)
-        except Exception:
-            return 0.0
-
-    if not df_blink.empty:
-        df_blink["Indoge_total_price"] = df_blink["OrderJson"].map(extract_total)
-        df_blink = df_blink[["BlinkOrderId", "Indoge_total_price"]]
-    else:
-        df_blink = pd.DataFrame(columns=["BlinkOrderId", "Indoge_total_price"])
+    df_qr = df_qr.copy()
+    df_qr["employee_id"] = pd.to_numeric(df_qr.get("employee_id"), errors="coerce").fillna(0).astype(int)
+    df_qr["employee_code"] = df_qr.get("employee_code", "").fillna("").astype(str)
+    df_qr["employee_name"] = df_qr.get("employee_name", "Online/Unassigned").fillna("Online/Unassigned").astype(str)
+    df_qr["shop_id"] = pd.to_numeric(df_qr.get("shop_id"), errors="coerce").fillna(0).astype(int)
+    df_qr["shop_name"] = df_qr.get("shop_name", "").fillna("").astype(str)
+    df_qr["total_sale"] = pd.to_numeric(df_qr.get("total_sale", 0.0), errors="coerce").fillna(0.0)
+    df_qr["external_ref_id"] = df_qr.get("external_ref_id", "").fillna("").astype(str).str.strip()
 
     merged = df_qr.merge(df_blink, left_on="external_ref_id", right_on="BlinkOrderId", how="left")
-    merged["Indoge_total_price"] = pd.to_numeric(merged["Indoge_total_price"], errors="coerce").fillna(0.0)
+    merged["Indoge_total_price"] = pd.to_numeric(merged.get("Indoge_total_price", 0.0), errors="coerce").fillna(0.0)
+    merged["Candelahns_commission"] = merged["total_sale"] * (commission_rate / 100.0)
     merged["Indoge_commission"] = merged["Indoge_total_price"] * (commission_rate / 100.0)
 
-    out = merged.groupby(["shop_id", "shop_name", "employee_name"], as_index=False).agg(
-        transaction_count=("external_ref_id", "count"),
-        QR_Total_Sales=("Indoge_total_price", "sum"),
-        QR_Commission=("Indoge_commission", "sum"),
+    merged = merged[merged["employee_name"].astype(str).str.strip().str.lower() != "online/unassigned"].copy()
+
+    employee_summary = (
+        merged.groupby(
+            ["employee_id", "employee_code", "employee_name", "shop_id", "shop_name"],
+            as_index=False,
+        )
+        .agg(
+            total_sale=("total_sale", "sum"),
+            Candelahns_commission=("Candelahns_commission", "sum"),
+            Indoge_total_price=("Indoge_total_price", "sum"),
+            Indoge_commission=("Indoge_commission", "sum"),
+            transaction_count=("external_ref_id", "count"),
+        )
+        .sort_values(["shop_id", "Indoge_total_price"], ascending=[True, False])
+        .reset_index(drop=True)
     )
-    out = out.sort_values(["shop_id", "QR_Total_Sales"], ascending=[True, False])
-    out["QR Total Sales"] = out["QR_Total_Sales"].map(lambda x: f"{x:,.0f}")
-    out["QR Commission"] = out["QR_Commission"].map(lambda x: f"{x:,.0f}")
-    return out[["shop_id", "shop_name", "employee_name", "transaction_count", "QR Total Sales", "QR Commission"]]
+    return employee_summary
 
 
 def build_ramzan_tables(
@@ -830,258 +858,373 @@ def generate_snapshots(
     branches: Sequence[int],
     data_mode: str = "Filtered",
     output_dir: str = "HNS_Deshboard/snapshots",
+    enabled_sections: Optional[dict] = None,
 ) -> Path:
     branches = as_int_list(branches)
+
+    enabled = {
+        "branch_cards": True,
+        "all_products_by_branch": True,
+        "qr_employee_no_sales": True,
+        "qr_employee_with_sales": True,
+        "ramzan_deals": True,
+        "material_cost_commission": True,
+        "khadda_diagnostics": True,
+    }
+    if isinstance(enabled_sections, dict):
+        for k, v in enabled_sections.items():
+            if k in enabled:
+                enabled[k] = bool(v)
+
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_root = Path(output_dir) / f"snap_{start_date}_to_{end_date}_{ts}"
     out_root.mkdir(parents=True, exist_ok=True)
     period_label = f"{start_date} to {end_date}"
+    subtitle_label = f"{period_label} | Mode: {data_mode}"
+
+    # Persist run parameters to make it obvious what the snapshots correspond to.
+    try:
+        (out_root / "run_params.json").write_text(
+            json.dumps(
+                {
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "target_year": int(target_year),
+                    "target_month": int(target_month),
+                     "branches": [int(b) for b in branches],
+                     "data_mode": str(data_mode),
+                     "enabled_sections": enabled,
+                     "generated_at": datetime.now().isoformat(timespec="seconds"),
+                 },
+                 indent=2,
+             ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
     # 1) Branch cards snapshot
-    perf = build_branch_performance(
-        start_date=start_date,
-        end_date=end_date,
-        branch_ids=branches,
-        data_mode=data_mode,
-        target_year=target_year,
-        target_month=target_month,
-    )
-    card_path = out_root / "01_branch_performance_cards.png"
-    render_branch_cards(perf, card_path, period_label)
+    if enabled.get("branch_cards", True):
+        perf = build_branch_performance(
+            start_date=start_date,
+            end_date=end_date,
+            branch_ids=branches,
+            data_mode=data_mode,
+            target_year=target_year,
+            target_month=target_month,
+        )
+        card_path = out_root / "01_branch_performance_cards.png"
+        render_branch_cards(perf, card_path, subtitle_label)
+        save_table_dump(perf, out_root / "01_branch_performance_cards.csv")
 
     # 2) All products by branch (separate branch files)
-    products = build_all_products_by_branch(start_date, end_date, branches, data_mode)
-    p_dir = out_root / "all_products_by_branch"
-    p_dir.mkdir(parents=True, exist_ok=True)
-    for b in branches:
-        bdf = products[products["shop_id"] == int(b)].copy()
-        bname = BRANCH_NAMES.get(int(b), f"branch_{b}")
-        if not bdf.empty:
-            bdf = bdf.drop(columns=["shop_id"])
-        table_image(
-            bdf,
-            title=f"All Products by Branch - {bname}",
-            out_path=p_dir / f"{int(b):02d}_{bname.replace(' ', '_').lower()}.png",
-            rows_per_page=30,
-            subtitle=period_label,
-        )
+    if enabled.get("all_products_by_branch", True):
+        products = build_all_products_by_branch(start_date, end_date, branches, data_mode)
+        p_dir = out_root / "all_products_by_branch"
+        p_dir.mkdir(parents=True, exist_ok=True)
+        save_table_dump(products, p_dir / "_all_products_by_branch_raw.csv")
+        for b in branches:
+            bdf = products[products["shop_id"] == int(b)].copy()
+            bname = BRANCH_NAMES.get(int(b), f"branch_{b}")
+            if not bdf.empty:
+                bdf = bdf.drop(columns=["shop_id"])
+            table_image(
+                bdf,
+                title=f"All Products by Branch - {bname}",
+                out_path=p_dir / f"{int(b):02d}_{bname.replace(' ', '_').lower()}.png",
+                rows_per_page=30,
+                subtitle=subtitle_label,
+            )
 
     # 3) Employee-wise Totals (No Sales/Candelahns), branch-wise
-    emp = fetch_qr_employee_no_sales(start_date, end_date, branches, data_mode)
-    e_dir = out_root / "employee_wise_no_sales_branch_wise"
-    e_dir.mkdir(parents=True, exist_ok=True)
-    for b in branches:
-        edf = emp[emp["shop_id"] == int(b)].copy()
-        bname = BRANCH_NAMES.get(int(b), f"branch_{b}")
-        if not edf.empty:
-            edf = edf.rename(columns={"employee_name": "Employee", "shop_name": "Shop", "transaction_count": "Tx Count"})
-            edf = edf.drop(columns=["shop_id"])
-        table_image(
-            edf,
-            title=f"Employee-wise QR Total Sales and Commission - {bname}",
-            out_path=e_dir / f"{int(b):02d}_{bname.replace(' ', '_').lower()}.png",
-            rows_per_page=28,
-            subtitle=period_label,
-        )
+    emp = None
+    if enabled.get("qr_employee_no_sales", True) or enabled.get("qr_employee_with_sales", True):
+        emp = fetch_qr_employee_no_sales(start_date, end_date, branches, data_mode)
+
+    if enabled.get("qr_employee_no_sales", True):
+        e_dir = out_root / "employee_wise_no_sales_branch_wise"
+        e_dir.mkdir(parents=True, exist_ok=True)
+        save_table_dump(emp, e_dir / "_employee_wise_no_sales_branch_wise_raw.csv")
+        for b in branches:
+            edf = emp[emp["shop_id"] == int(b)].copy()
+            bname = BRANCH_NAMES.get(int(b), f"branch_{b}")
+            if not edf.empty:
+                edf = edf[[
+                    "employee_id",
+                    "employee_code",
+                    "employee_name",
+                    "transaction_count",
+                    "Indoge_total_price",
+                    "Indoge_commission",
+                ]].copy()
+                edf["Indoge_total_price"] = pd.to_numeric(edf["Indoge_total_price"], errors="coerce").fillna(0.0).map(lambda x: f"{x:,.0f}")
+                edf["Indoge_commission"] = pd.to_numeric(edf["Indoge_commission"], errors="coerce").fillna(0.0).map(lambda x: f"{x:,.0f}")
+                edf["transaction_count"] = pd.to_numeric(edf["transaction_count"], errors="coerce").fillna(0).astype(int)
+                edf = edf.rename(
+                    columns={
+                        "employee_id": "Emp ID",
+                        "employee_code": "Field Code",
+                        "employee_name": "Employee",
+                        "transaction_count": "Tx Count",
+                        "Indoge_total_price": "QR Total Sales",
+                        "Indoge_commission": "QR Commission",
+                    }
+                )
+            table_image(
+                edf,
+                title=f"Employee-wise QR Total Sales and Commission - {bname}",
+                out_path=e_dir / f"{int(b):02d}_{bname.replace(' ', '_').lower()}.png",
+                rows_per_page=28,
+                subtitle=subtitle_label,
+            )
+
+    if enabled.get("qr_employee_with_sales", True):
+        # 3b) QR Employee totals (with sales + both commissions), branch-wise
+        e2_dir = out_root / "qr_employee_totals_with_sales"
+        e2_dir.mkdir(parents=True, exist_ok=True)
+        save_table_dump(emp, e2_dir / "_qr_employee_totals_with_sales_raw.csv")
+        for b in branches:
+            edf = emp[emp["shop_id"] == int(b)].copy()
+            bname = BRANCH_NAMES.get(int(b), f"branch_{b}")
+            if not edf.empty:
+                edf = edf[[
+                    "employee_id",
+                    "employee_code",
+                    "employee_name",
+                    "transaction_count",
+                    "total_sale",
+                    "Candelahns_commission",
+                    "Indoge_total_price",
+                    "Indoge_commission",
+                ]].copy()
+                for col in ["total_sale", "Candelahns_commission", "Indoge_total_price", "Indoge_commission"]:
+                    edf[col] = pd.to_numeric(edf[col], errors="coerce").fillna(0.0).map(lambda x: f"{x:,.0f}")
+                edf["transaction_count"] = pd.to_numeric(edf["transaction_count"], errors="coerce").fillna(0).astype(int)
+                edf = edf.rename(
+                    columns={
+                        "employee_id": "Emp ID",
+                        "employee_code": "Field Code",
+                        "employee_name": "Employee",
+                        "transaction_count": "Tx Count",
+                        "total_sale": "Total Sales",
+                        "Candelahns_commission": "Candelahns Comm.",
+                        "Indoge_total_price": "Indoge Total",
+                        "Indoge_commission": "Indoge Comm.",
+                    }
+                )
+            table_image(
+                edf,
+                title=f"QR Employee Totals (with Sales) - {bname}",
+                out_path=e2_dir / f"{int(b):02d}_{bname.replace(' ', '_').lower()}.png",
+                rows_per_page=28,
+                subtitle=subtitle_label,
+            )
 
     # 4) Ramzan deals: branch-wise + overall product-wise
-    ram_branch, ram_overall = build_ramzan_tables(start_date, end_date, branches)
-    r_dir = out_root / "ramzan_deals"
-    r_dir.mkdir(parents=True, exist_ok=True)
-    for b in branches:
-        rdf = ram_branch[ram_branch["shop_id"] == int(b)].copy()
-        bname = BRANCH_NAMES.get(int(b), f"branch_{b}")
-        if not rdf.empty:
-            rdf = rdf.drop(columns=["shop_id", "Product_Item_ID", "Product_code"])
-        table_image(
-            rdf,
-            title=f"Ramzan Deals - Branch-wise Sales - {bname}",
-            out_path=r_dir / f"branch_{int(b):02d}_{bname.replace(' ', '_').lower()}.png",
-            rows_per_page=30,
-            subtitle=period_label,
-        )
+    if enabled.get("ramzan_deals", True):
+        ram_branch, ram_overall = build_ramzan_tables(start_date, end_date, branches)
+        r_dir = out_root / "ramzan_deals"
+        r_dir.mkdir(parents=True, exist_ok=True)
+        save_table_dump(ram_branch, r_dir / "_ramzan_branch_raw.csv")
+        save_table_dump(ram_overall, r_dir / "_ramzan_overall_raw.csv")
+        for b in branches:
+            rdf = ram_branch[ram_branch["shop_id"] == int(b)].copy()
+            bname = BRANCH_NAMES.get(int(b), f"branch_{b}")
+            if not rdf.empty:
+                rdf = rdf.drop(columns=["shop_id", "Product_Item_ID", "Product_code"])
+            table_image(
+                rdf,
+                title=f"Ramzan Deals - Branch-wise Sales - {bname}",
+                out_path=r_dir / f"branch_{int(b):02d}_{bname.replace(' ', '_').lower()}.png",
+                rows_per_page=30,
+                subtitle=subtitle_label,
+            )
 
-    if not ram_overall.empty:
-        ram_overall = ram_overall.drop(columns=["Product_Item_ID", "Product_code"])
-    table_image(
-        ram_overall,
-        title="Ramzan Deals - Product-wise Overall Sales",
-        out_path=r_dir / "product_wise_overall.png",
-        rows_per_page=35,
-        subtitle=period_label,
-    )
+        if not ram_overall.empty:
+            ram_overall = ram_overall.drop(columns=["Product_Item_ID", "Product_code"])
+        table_image(
+            ram_overall,
+            title="Ramzan Deals - Product-wise Overall Sales",
+            out_path=r_dir / "product_wise_overall.png",
+            rows_per_page=35,
+            subtitle=subtitle_label,
+        )
 
     # 5) Material Cost Commission snapshots
-    m_dir = out_root / "material_cost_commission"
-    m_dir.mkdir(parents=True, exist_ok=True)
+    if enabled.get("material_cost_commission", True):
+        m_dir = out_root / "material_cost_commission"
+        m_dir.mkdir(parents=True, exist_ok=True)
 
-    branch_comm_df = get_branch_material_cost_summary(start_date, end_date, branches, data_mode=data_mode)
-    if branch_comm_df is not None and not branch_comm_df.empty:
-        b_show = branch_comm_df.copy()
-        b_show = ensure_numeric(
-            b_show,
-            ["total_units_sold", "total_sales", "total_material_cost", "total_commission", "avg_commission_rate"],
-        )
-        b_show = b_show.rename(
-            columns={
-                "shop_name": "Shop",
-                "total_units_sold": "Units Sold",
-                "total_sales": "Total Sales",
-                "total_material_cost": "Total Material Cost",
-                "total_commission": "Total Commission",
-                "avg_commission_rate": "Avg Rate",
-            }
-        )
-        if "Total Sales" in b_show.columns:
-            b_show["Total Sales"] = b_show["Total Sales"].map(format_currency)
-        if "Total Material Cost" in b_show.columns:
-            b_show["Total Material Cost"] = b_show["Total Material Cost"].map(format_currency)
-        if "Total Commission" in b_show.columns:
-            b_show["Total Commission"] = b_show["Total Commission"].map(format_currency)
-        if "Avg Rate" in b_show.columns:
-            b_show["Avg Rate"] = b_show["Avg Rate"].map(lambda x: f"{float(x):.1f}%")
-    else:
-        b_show = pd.DataFrame()
-    table_image(
-        b_show,
-        title="Material Cost Commission - Branch Summary",
-        out_path=m_dir / "01_branch_summary.png",
-        rows_per_page=32,
-        subtitle=period_label,
-    )
-
-    emp_comm_df = get_employee_material_cost_summary(start_date, end_date, branches, data_mode=data_mode)
-    if emp_comm_df is not None and not emp_comm_df.empty:
-        e_show_all = emp_comm_df.copy()
-        e_show_all = ensure_numeric(
-            e_show_all,
-            ["total_units_sold", "total_sales", "total_material_cost", "total_commission", "avg_commission_rate"],
-        )
-        e_show_all = e_show_all.rename(
-            columns={
-                "employee_name": "Employee",
-                "shop_name": "Shop",
-                "total_units_sold": "Units Sold",
-                "total_sales": "Total Sales",
-                "total_material_cost": "Total Material Cost",
-                "total_commission": "Total Commission",
-                "avg_commission_rate": "Avg Rate",
-            }
-        )
-        if "Total Sales" in e_show_all.columns:
-            e_show_all["Total Sales"] = e_show_all["Total Sales"].map(format_currency)
-        if "Total Material Cost" in e_show_all.columns:
-            e_show_all["Total Material Cost"] = e_show_all["Total Material Cost"].map(format_currency)
-        if "Total Commission" in e_show_all.columns:
-            e_show_all["Total Commission"] = e_show_all["Total Commission"].map(format_currency)
-    else:
-        e_show_all = pd.DataFrame()
-
-    # Branch-wise employee summary snapshots (exclude shop_id, total_transactions, avg rate)
-    for b in branches:
-        bname = BRANCH_NAMES.get(int(b), f"branch_{b}")
-        bdf = e_show_all.copy()
-        if not bdf.empty and "Shop" in bdf.columns:
-            bdf = bdf[bdf["Shop"] == bname].copy()
-        if "Shop" in bdf.columns:
-            bdf = bdf.drop(columns=["Shop"], errors="ignore")
-        bdf = bdf.drop(columns=["shop_id", "total_transactions", "Avg Rate"], errors="ignore")
+        branch_comm_df = get_branch_material_cost_summary(start_date, end_date, branches, data_mode=data_mode)
+        if branch_comm_df is not None and not branch_comm_df.empty:
+            b_show = branch_comm_df.copy()
+            b_show = ensure_numeric(
+                b_show,
+                ["total_units_sold", "total_sales", "total_material_cost", "total_commission", "avg_commission_rate"],
+            )
+            b_show = b_show.rename(
+                columns={
+                    "shop_name": "Shop",
+                    "total_units_sold": "Units Sold",
+                    "total_sales": "Total Sales",
+                    "total_material_cost": "Total Material Cost",
+                    "total_commission": "Total Commission",
+                    "avg_commission_rate": "Avg Rate",
+                }
+            )
+            if "Total Sales" in b_show.columns:
+                b_show["Total Sales"] = b_show["Total Sales"].map(format_currency)
+            if "Total Material Cost" in b_show.columns:
+                b_show["Total Material Cost"] = b_show["Total Material Cost"].map(format_currency)
+            if "Total Commission" in b_show.columns:
+                b_show["Total Commission"] = b_show["Total Commission"].map(format_currency)
+            if "Avg Rate" in b_show.columns:
+                b_show["Avg Rate"] = b_show["Avg Rate"].map(lambda x: f"{float(x):.1f}%")
+        else:
+            b_show = pd.DataFrame()
         table_image(
-            bdf,
-            title=f"Material Cost Commission - Employee Summary - {bname}",
-            out_path=m_dir / f"02_employee_summary_{bname.replace(' ', '_').lower()}.png",
+            b_show,
+            title="Material Cost Commission - Branch Summary",
+            out_path=m_dir / "01_branch_summary.png",
             rows_per_page=32,
-            subtitle=period_label,
+            subtitle=subtitle_label,
         )
 
-    branch_prod_df = get_branch_product_material_cost_summary(start_date, end_date, branches, data_mode=data_mode)
-    if branch_prod_df is not None and not branch_prod_df.empty:
-        bp_show = branch_prod_df.copy()
-        bp_show = ensure_numeric(
+        emp_comm_df = get_employee_material_cost_summary(start_date, end_date, branches, data_mode=data_mode)
+        if emp_comm_df is not None and not emp_comm_df.empty:
+            e_show_all = emp_comm_df.copy()
+            e_show_all = ensure_numeric(
+                e_show_all,
+                ["total_units_sold", "total_sales", "total_material_cost", "total_commission", "avg_commission_rate"],
+            )
+            e_show_all = e_show_all.rename(
+                columns={
+                    "employee_name": "Employee",
+                    "shop_name": "Shop",
+                    "total_units_sold": "Units Sold",
+                    "total_sales": "Total Sales",
+                    "total_material_cost": "Total Material Cost",
+                    "total_commission": "Total Commission",
+                    "avg_commission_rate": "Avg Rate",
+                }
+            )
+            if "Total Sales" in e_show_all.columns:
+                e_show_all["Total Sales"] = e_show_all["Total Sales"].map(format_currency)
+            if "Total Material Cost" in e_show_all.columns:
+                e_show_all["Total Material Cost"] = e_show_all["Total Material Cost"].map(format_currency)
+            if "Total Commission" in e_show_all.columns:
+                e_show_all["Total Commission"] = e_show_all["Total Commission"].map(format_currency)
+        else:
+            e_show_all = pd.DataFrame()
+
+        # Branch-wise employee summary snapshots (exclude shop_id, total_transactions, avg rate)
+        for b in branches:
+            bname = BRANCH_NAMES.get(int(b), f"branch_{b}")
+            bdf = e_show_all.copy()
+            if not bdf.empty and "Shop" in bdf.columns:
+                bdf = bdf[bdf["Shop"] == bname].copy()
+            if "Shop" in bdf.columns:
+                bdf = bdf.drop(columns=["Shop"], errors="ignore")
+            bdf = bdf.drop(columns=["shop_id", "total_transactions", "Avg Rate"], errors="ignore")
+            table_image(
+                bdf,
+                title=f"Material Cost Commission - Employee Summary - {bname}",
+                out_path=m_dir / f"02_employee_summary_{bname.replace(' ', '_').lower()}.png",
+                rows_per_page=32,
+                subtitle=subtitle_label,
+            )
+
+        branch_prod_df = get_branch_product_material_cost_summary(start_date, end_date, branches, data_mode=data_mode)
+        if branch_prod_df is not None and not branch_prod_df.empty:
+            bp_show = branch_prod_df.copy()
+            bp_show = ensure_numeric(
+                bp_show,
+                [
+                    "total_units_sold",
+                    "total_sales",
+                    "material_cost",
+                    "total_material_cost",
+                    "commission",
+                    "total_commission",
+                    "commission_rate",
+                ],
+            )
+            bp_show = bp_show.rename(
+                columns={
+                    "shop_name": "Shop",
+                    "product_code": "Product Code",
+                    "product_name": "Product",
+                    "total_units_sold": "Units Sold",
+                    "total_sales": "Total Sales",
+                    "material_cost": "Material Cost",
+                    "total_material_cost": "Total Material Cost",
+                    "commission": "Commission",
+                    "total_commission": "Total Commission",
+                    "commission_rate": "Rate",
+                }
+            )
+            for col in ["Total Sales", "Material Cost", "Total Material Cost", "Commission", "Total Commission"]:
+                if col in bp_show.columns:
+                    bp_show[col] = bp_show[col].map(format_currency)
+            if "Rate" in bp_show.columns:
+                bp_show["Rate"] = bp_show["Rate"].map(lambda x: f"{float(x):.1f}%")
+        else:
+            bp_show = pd.DataFrame()
+        table_image(
             bp_show,
-            [
-                "total_units_sold",
-                "total_sales",
-                "material_cost",
-                "total_material_cost",
-                "commission",
-                "total_commission",
-                "commission_rate",
-            ],
+            title="Material Cost Commission - Product-wise by Branch",
+            out_path=m_dir / "03_product_by_branch.png",
+            rows_per_page=28,
+            subtitle=subtitle_label,
         )
-        bp_show = bp_show.rename(
-            columns={
-                "shop_name": "Shop",
-                "product_code": "Product Code",
-                "product_name": "Product",
-                "total_units_sold": "Units Sold",
-                "total_sales": "Total Sales",
-                "material_cost": "Material Cost",
-                "total_material_cost": "Total Material Cost",
-                "commission": "Commission",
-                "total_commission": "Total Commission",
-                "commission_rate": "Rate",
-            }
-        )
-        for col in ["Total Sales", "Material Cost", "Total Material Cost", "Commission", "Total Commission"]:
-            if col in bp_show.columns:
-                bp_show[col] = bp_show[col].map(format_currency)
-        if "Rate" in bp_show.columns:
-            bp_show["Rate"] = bp_show["Rate"].map(lambda x: f"{float(x):.1f}%")
-    else:
-        bp_show = pd.DataFrame()
-    table_image(
-        bp_show,
-        title="Material Cost Commission - Product-wise by Branch",
-        out_path=m_dir / "03_product_by_branch.png",
-        rows_per_page=28,
-        subtitle=period_label,
-    )
 
-    prod_df = get_product_material_cost_summary(start_date, end_date, branches, data_mode=data_mode)
-    if prod_df is not None and not prod_df.empty:
-        p_show = prod_df.copy()
-        p_show = ensure_numeric(
+        prod_df = get_product_material_cost_summary(start_date, end_date, branches, data_mode=data_mode)
+        if prod_df is not None and not prod_df.empty:
+            p_show = prod_df.copy()
+            p_show = ensure_numeric(
+                p_show,
+                [
+                    "total_units_sold",
+                    "total_sales",
+                    "material_cost",
+                    "total_material_cost",
+                    "commission",
+                    "total_commission",
+                    "commission_rate",
+                ],
+            )
+            p_show = p_show.rename(
+                columns={
+                    "product_code": "Product Code",
+                    "product_name": "Product",
+                    "total_units_sold": "Units Sold",
+                    "total_sales": "Total Sales",
+                    "material_cost": "Material Cost",
+                    "total_material_cost": "Total Material Cost",
+                    "commission": "Commission",
+                    "total_commission": "Total Commission",
+                    "commission_rate": "Rate",
+                }
+            )
+            for col in ["Total Sales", "Material Cost", "Total Material Cost", "Commission", "Total Commission"]:
+                if col in p_show.columns:
+                    p_show[col] = p_show[col].map(format_currency)
+            if "Rate" in p_show.columns:
+                p_show["Rate"] = p_show["Rate"].map(lambda x: f"{float(x):.1f}%")
+        else:
+            p_show = pd.DataFrame()
+        table_image(
             p_show,
-            [
-                "total_units_sold",
-                "total_sales",
-                "material_cost",
-                "total_material_cost",
-                "commission",
-                "total_commission",
-                "commission_rate",
-            ],
+            title="Material Cost Commission - Product-wise Overall",
+            out_path=m_dir / "04_product_overall.png",
+            rows_per_page=32,
+            subtitle=subtitle_label,
         )
-        p_show = p_show.rename(
-            columns={
-                "product_code": "Product Code",
-                "product_name": "Product",
-                "total_units_sold": "Units Sold",
-                "total_sales": "Total Sales",
-                "material_cost": "Material Cost",
-                "total_material_cost": "Total Material Cost",
-                "commission": "Commission",
-                "total_commission": "Total Commission",
-                "commission_rate": "Rate",
-            }
-        )
-        for col in ["Total Sales", "Material Cost", "Total Material Cost", "Commission", "Total Commission"]:
-            if col in p_show.columns:
-                p_show[col] = p_show[col].map(format_currency)
-        if "Rate" in p_show.columns:
-            p_show["Rate"] = p_show["Rate"].map(lambda x: f"{float(x):.1f}%")
-    else:
-        p_show = pd.DataFrame()
-    table_image(
-        p_show,
-        title="Material Cost Commission - Product-wise Overall",
-        out_path=m_dir / "04_product_overall.png",
-        rows_per_page=32,
-        subtitle=period_label,
-    )
 
     # Detailed analysis snapshot removed per request
+
+    if not enabled.get("khadda_diagnostics", True):
+        return out_root
 
     # 6) Khadda Diagnostics snapshot (Employee Summary: non-Blinkco POS, with+without ref)
     k_dir = out_root / "khadda_diagnostics"
@@ -1116,7 +1259,7 @@ def generate_snapshots(
             title=f"Employee-wise QR Total Sales and Commission - {bname}",
             out_path=k_dir / f"{int(b):02d}_{bname.replace(' ', '_').lower()}.png",
             rows_per_page=28,
-            subtitle=period_label,
+            subtitle=subtitle_label,
         )
 
         # Combined snapshot (1–10 Mar within_20 + post-cutoff QR to end_date)
@@ -1149,7 +1292,7 @@ def generate_snapshots(
             title=f"Khadda Employee Summary (1-10 Mar + Post-cutoff) - {bname}",
             out_path=k_dir / f"{int(b):02d}_{bname.replace(' ', '_').lower()}_combined.png",
             rows_per_page=28,
-            subtitle=period_label,
+            subtitle=subtitle_label,
         )
 
     # 6) Khadda Diagnostics daily employee summaries (fixed range + post-cutoff)

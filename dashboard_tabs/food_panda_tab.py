@@ -237,6 +237,7 @@ class FoodPandaTab:
         mismatches = _drop_hidden_cols(result.mismatches.copy())
         unmatched = _drop_hidden_cols(result.unmatched.copy())
         duplicates = _drop_hidden_cols(result.duplicates.copy())
+        excel_duplicates = _drop_hidden_cols(result.excel_duplicates.copy())
 
         # Summary metrics
         metrics = {r["metric"]: r["value"] for r in result.summary.to_dict("records")}
@@ -258,6 +259,9 @@ class FoodPandaTab:
         st.subheader("Unmatched")
         st.dataframe(unmatched, width="stretch", hide_index=True, height=260)
 
+        st.subheader("Excel Duplicates (Audit)")
+        st.dataframe(excel_duplicates, width="stretch", hide_index=True, height=260)
+
         st.subheader("Duplicates (Audit)")
         st.dataframe(duplicates, width="stretch", hide_index=True, height=260)
 
@@ -270,6 +274,7 @@ class FoodPandaTab:
             "matched_only": matched_only,
             "mismatches": mismatches,
             "unmatched": unmatched,
+            "excel_duplicates": excel_duplicates,
             "duplicates": duplicates,
             "summary": result.summary,
         }

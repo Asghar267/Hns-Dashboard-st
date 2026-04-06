@@ -12,6 +12,8 @@ __pycache__/
 
 # Streamlit
 .streamlit/secrets.toml
+.kilo/
+config/snapshot_settings.json
 
 # Runtime session store (generated; do not commit)
 config/sessions.json
@@ -28,6 +30,7 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+nul
 
 # Node
 node_modules/
