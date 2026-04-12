@@ -29,7 +29,7 @@ from modules.config import BLOCKED_NAMES, BLOCKED_COMMENTS
 
 
 @st.cache_data(ttl=DatabaseConfig.CACHE_TTL)
-def _cached_qr_commission_data(start_str: str, end_exclusive_str: str, branch_ids: List[int], mode: str) -> pd.DataFrame:
+def _cached_qr_commission_data(start_str: str, end_date_str: str, branch_ids: List[int], mode: str) -> pd.DataFrame:
     conn = pool.get_connection("candelahns")
     qr_query = f"""
     SELECT
@@ -46,11 +46,11 @@ def _cached_qr_commission_data(start_str: str, end_exclusive_str: str, branch_id
     LEFT JOIN tblDefShopEmployees e ON s.employee_id = e.shop_employee_id
     LEFT JOIN tblDefShops sh ON s.shop_id = sh.shop_id
     WHERE s.sale_date >= ?
-      AND s.sale_date < ?
+      AND s.sale_date < DATEADD(DAY, 1, ?)
       AND s.shop_id IN ({placeholders(len(branch_ids))})
       AND s.external_ref_type = 'Blinkco order'
     """
-    qr_params: List = [start_str, end_exclusive_str] + branch_ids
+    qr_params: List = [start_str, end_date_str] + branch_ids
     if mode == "Filtered":
         if BLOCKED_NAMES:
             qr_query += f" AND s.Cust_name NOT IN ({placeholders(len(BLOCKED_NAMES))})"
@@ -65,7 +65,7 @@ def _cached_qr_commission_data(start_str: str, end_exclusive_str: str, branch_id
 
 
 @st.cache_data(ttl=DatabaseConfig.CACHE_TTL)
-def _cached_sales_summary_combined(start_str: str, end_exclusive_str: str, branch_ids: List[int], mode: str) -> pd.DataFrame:
+def _cached_sales_summary_combined(start_str: str, end_date_str: str, branch_ids: List[int], mode: str) -> pd.DataFrame:
     conn = pool.get_connection("candelahns")
     query = f"""
     SELECT
@@ -82,10 +82,10 @@ def _cached_sales_summary_combined(start_str: str, end_exclusive_str: str, branc
     LEFT JOIN tblDefShopEmployees e ON s.employee_id = e.shop_employee_id
     LEFT JOIN tblDefShops sh ON s.shop_id = sh.shop_id
     WHERE s.sale_date >= ?
-      AND s.sale_date < ?
+      AND s.sale_date < DATEADD(DAY, 1, ?)
       AND s.shop_id IN ({placeholders(len(branch_ids))})
     """
-    params: List = [start_str, end_exclusive_str] + branch_ids
+    params: List = [start_str, end_date_str] + branch_ids
     if mode == "Filtered":
         if BLOCKED_NAMES:
             query += f" AND s.Cust_name NOT IN ({placeholders(len(BLOCKED_NAMES))})"
@@ -108,21 +108,21 @@ def _cached_sales_summary_combined(start_str: str, end_exclusive_str: str, branc
 
 
 @st.cache_data(ttl=DatabaseConfig.CACHE_TTL)
-def _cached_blink_raw_orders(start_str: str, end_exclusive_str: str) -> pd.DataFrame:
+def _cached_blink_raw_orders(start_str: str, end_date_str: str) -> pd.DataFrame:
     conn = pool.get_connection("candelahns")
     blink_raw_query = """
 SELECT
     BlinkOrderId,
     OrderJson,
     CreatedAt
-FROM tblInitialRawBlinkOrder
-    WHERE CreatedAt >= ? AND CreatedAt < ?
+    FROM tblInitialRawBlinkOrder
+        WHERE CreatedAt >= ? AND CreatedAt < DATEADD(DAY, 1, ?)
     """
-    return pd.read_sql(blink_raw_query, conn, params=[start_str, end_exclusive_str])
+    return pd.read_sql(blink_raw_query, conn, params=[start_str, end_date_str])
 
 
 @st.cache_data(ttl=DatabaseConfig.CACHE_TTL)
-def _cached_qr_product_sales_data(start_str: str, end_exclusive_str: str, branch_ids: List[int], mode: str) -> pd.DataFrame:
+def _cached_qr_product_sales_data(start_str: str, end_date_str: str, branch_ids: List[int], mode: str) -> pd.DataFrame:
     conn = pool.get_connection("candelahns")
     product_query = f"""
     SELECT
@@ -138,11 +138,11 @@ def _cached_qr_product_sales_data(start_str: str, end_exclusive_str: str, branch
     LEFT JOIN tblDefProducts p ON pi.Product_ID = p.Product_ID
     LEFT JOIN tblDefShops sh ON s.shop_id = sh.shop_id
     WHERE s.sale_date >= ?
-      AND s.sale_date < ?
+      AND s.sale_date < DATEADD(DAY, 1, ?)
       AND s.shop_id IN ({placeholders(len(branch_ids))})
       AND s.external_ref_type = 'Blinkco order'
     """
-    params: List = [start_str, end_exclusive_str] + branch_ids
+    params: List = [start_str, end_date_str] + branch_ids
     if mode == "Filtered":
         if BLOCKED_NAMES:
             product_query += f" AND s.Cust_name NOT IN ({placeholders(len(BLOCKED_NAMES))})"
@@ -179,7 +179,7 @@ class QRCommissionTab:
 
     def render_qr_commission(self, commission_rate: float = 2.0):
         """Render the QR Commission dashboard"""
-        end_exclusive_qr = (pd.to_datetime(self.end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        end_qr = self.end_date
         cache_bucket = st.session_state.setdefault("qr_tab_cache", {})
         cache_sig = (self.start_date, self.end_date, tuple(sorted(self.selected_branches)), self.data_mode)
 
@@ -205,16 +205,16 @@ class QRCommissionTab:
 
         # Fetch data
         with perf_trace("QR fetch (queries)", "db"):
-            df_qr = self._fetch_qr_commission_data(self.start_date, end_exclusive_qr, self.selected_branches, self.data_mode)
+            df_qr = self._fetch_qr_commission_data(self.start_date, end_qr, self.selected_branches, self.data_mode)
             # Reduce redundant queries: use combined summary for all+blinkco in one call.
             df_total_sales = self._fetch_sales_summary_combined(
                 self.start_date,
-                end_exclusive_qr,
+                end_qr,
                 self.selected_branches,
                 self.data_mode,
             )
-            df_blink_raw = self._fetch_blink_raw_orders(self.start_date, end_exclusive_qr)
-            df_qr_products = self._fetch_qr_product_sales_data(self.start_date, end_exclusive_qr, self.selected_branches, self.data_mode)
+            df_blink_raw = self._fetch_blink_raw_orders(self.start_date, end_qr)
+            df_qr_products = self._fetch_qr_product_sales_data(self.start_date, end_qr, self.selected_branches, self.data_mode)
 
         raw_blink_rows = len(df_blink_raw)
         with perf_trace("QR process (blink prep)", "processing"):
@@ -501,8 +501,8 @@ class QRCommissionTab:
             # Fetch from SQL instead of Python aggregation
             daily_summary = get_qr_daily_summary(
                 self.start_date,
-                end_exclusive_qr,
-                self.selected_branches
+                end_qr,
+                self.selected_branches,
             )
             
             if not daily_summary.empty:
@@ -548,8 +548,8 @@ class QRCommissionTab:
             # Fetch from SQL instead of Python aggregation
             emp_daily_summary = get_qr_employee_daily_summary(
                 self.start_date,
-                end_exclusive_qr,
-                self.selected_branches
+                end_qr,
+                self.selected_branches,
             )
             
             if not emp_daily_summary.empty:
@@ -689,6 +689,133 @@ class QRCommissionTab:
                         "Indoge_commission": st.column_config.Column("Indoge Comm.", width="medium"),
                     }
                 )
+
+            if _allow("Employee Totals"):
+                with st.expander("Why Candela vs Indoge differs? (Diagnostics)", expanded=False):
+                    try:
+                        # Build a stable selection list (avoid relying only on name which can repeat).
+                        emp_src = employee_summary.copy()
+                        emp_src["employee_id"] = pd.to_numeric(emp_src.get("employee_id"), errors="coerce").fillna(0).astype(int)
+                        emp_src["shop_id"] = pd.to_numeric(emp_src.get("shop_id"), errors="coerce").fillna(0).astype(int)
+                        emp_src["employee_code"] = emp_src.get("employee_code", "").fillna("").astype(str)
+                        emp_src["employee_name"] = emp_src.get("employee_name", "").fillna("").astype(str)
+                        emp_src["shop_name"] = emp_src.get("shop_name", "").fillna("").astype(str)
+                        emp_src["_label"] = emp_src.apply(
+                            lambda r: f"{r['shop_name']} | {r['employee_name']} (EmpID {int(r['employee_id'])}, Code {r['employee_code']})",
+                            axis=1,
+                        )
+                        emp_src = emp_src.sort_values(["shop_name", "employee_name", "employee_id"]).reset_index(drop=True)
+                        options = emp_src["_label"].tolist()
+                        if not options:
+                            st.info("No employees available for diagnostics.")
+                        else:
+                            default_idx = 0
+                            for i, lbl in enumerate(options):
+                                if "m. shahzad" in lbl.lower():
+                                    default_idx = i
+                                    break
+                            picked = st.selectbox(
+                                "Select employee row to analyze",
+                                options=options,
+                                index=default_idx,
+                                key="qr_diag_employee_pick",
+                            )
+                            row = emp_src[emp_src["_label"] == picked].head(1)
+                            if row.empty:
+                                st.info("Employee selection not found.")
+                            else:
+                                emp_id = int(row.iloc[0]["employee_id"])
+                                shop_id = int(row.iloc[0]["shop_id"])
+                                # Transaction-level rows for this employee (already includes sidebar filters)
+                                tx = df_merged.copy()
+                                tx["employee_id"] = pd.to_numeric(tx.get("employee_id"), errors="coerce").fillna(0).astype(int)
+                                tx["shop_id"] = pd.to_numeric(tx.get("shop_id"), errors="coerce").fillna(0).astype(int)
+                                tx = tx[(tx["employee_id"] == emp_id) & (tx["shop_id"] == shop_id)].copy()
+
+                                if tx.empty:
+                                    st.info("No transactions found for this employee in selected date range/filters.")
+                                else:
+                                    tx["total_sale"] = pd.to_numeric(tx.get("total_sale", 0), errors="coerce").fillna(0.0)
+                                    tx["Indoge_total_price"] = pd.to_numeric(tx.get("Indoge_total_price", 0), errors="coerce").fillna(0.0)
+                                    tx["difference"] = pd.to_numeric(tx.get("difference", 0), errors="coerce").fillna(0.0)
+                                    tx["has_blink_order"] = tx.get("BlinkOrderId", "-").astype(str).ne("-")
+                                    tx["json_parse_ok"] = tx.get("json_parse_ok", False).fillna(False).astype(bool)
+                                    tx["missing_raw_order"] = ~tx["has_blink_order"]
+                                    tx["parse_failed"] = tx["has_blink_order"] & (~tx["json_parse_ok"])
+                                    tx["abs_diff"] = tx["difference"].abs()
+
+                                    cand_total = float(tx["total_sale"].sum())
+                                    ind_total = float(tx["Indoge_total_price"].sum())
+                                    c1, c2, c3, c4 = st.columns(4)
+                                    c1.metric("Candela Total", f"{cand_total:,.0f}")
+                                    c2.metric("Indoge Total", f"{ind_total:,.0f}")
+                                    c3.metric("Indoge - Candela", f"{(ind_total - cand_total):,.0f}")
+                                    c4.metric("Tx Count", f"{len(tx):,}")
+
+                                    b1, b2, b3 = st.columns(3)
+                                    b1.metric("Missing raw order", f"{int(tx['missing_raw_order'].sum()):,}")
+                                    b2.metric("JSON parse failed", f"{int(tx['parse_failed'].sum()):,}")
+                                    b3.metric("Large mismatches (abs>1)", f"{int((tx['abs_diff'] > 1.0).sum()):,}")
+
+                                    top_n = int(st.number_input("Show top N mismatches", 5, 100, 15, 1, key="qr_diag_topn"))
+                                    top = tx.sort_values("abs_diff", ascending=False).head(top_n).copy()
+                                    top["sale_date"] = pd.to_datetime(top.get("sale_date"), errors="coerce")
+                                    top_show = top[
+                                        [
+                                            "sale_id",
+                                            "sale_date",
+                                            "external_ref_id",
+                                            "BlinkOrderId",
+                                            "json_parse_ok",
+                                            "total_sale",
+                                            "Indoge_total_price",
+                                            "difference",
+                                        ]
+                                    ].copy()
+                                    top_show["sale_date"] = top_show["sale_date"].dt.strftime("%Y-%m-%d %H:%M:%S")
+                                    st.markdown("#### Top mismatching transactions")
+                                    st.dataframe(top_show, width="stretch", hide_index=True, height=360)
+
+                                    st.markdown("#### Missing raw order (no Blink raw found for external_ref_id)")
+                                    miss = tx[tx["missing_raw_order"]].copy()
+                                    if miss.empty:
+                                        st.info("None")
+                                    else:
+                                        miss_show = miss[["sale_id", "sale_date", "external_ref_id", "total_sale"]].copy()
+                                        miss_show["sale_date"] = pd.to_datetime(miss_show["sale_date"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S")
+                                        st.dataframe(miss_show.sort_values("total_sale", ascending=False), width="stretch", hide_index=True, height=240)
+
+                                    st.markdown("#### JSON parse failed (raw row present but total could not be extracted)")
+                                    pf = tx[tx["parse_failed"]].copy()
+                                    if pf.empty:
+                                        st.info("None")
+                                    else:
+                                        pf_show = pf[["sale_id", "sale_date", "external_ref_id", "BlinkOrderId", "total_sale"]].copy()
+                                        pf_show["sale_date"] = pd.to_datetime(pf_show["sale_date"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S")
+                                        st.dataframe(pf_show.sort_values("total_sale", ascending=False), width="stretch", hide_index=True, height=240)
+
+                                        # If raw JSON is available in scope, attach a short snippet for debugging.
+                                        try:
+                                            if df_blink_raw is not None and not df_blink_raw.empty and {"BlinkOrderId", "OrderJson"}.issubset(df_blink_raw.columns):
+                                                raw_map = df_blink_raw[["BlinkOrderId", "OrderJson"]].copy()
+                                                raw_map["BlinkOrderId"] = raw_map["BlinkOrderId"].astype(str).str.strip()
+                                                raw_map["OrderJson"] = raw_map["OrderJson"].astype(str)
+                                                raw_map = raw_map.drop_duplicates(subset=["BlinkOrderId"], keep="first")
+                                                pf_snip = pf_show.copy()
+                                                pf_snip["BlinkOrderId"] = pf_snip["BlinkOrderId"].astype(str).str.strip()
+                                                pf_snip = pf_snip.merge(raw_map, on="BlinkOrderId", how="left")
+                                                pf_snip["OrderJson_snippet"] = pf_snip["OrderJson"].fillna("").map(lambda x: (x[:220] + "…") if len(x) > 220 else x)
+                                                st.caption("OrderJson snippets (first 220 chars) for parse-fail rows:")
+                                                st.dataframe(
+                                                    pf_snip[["sale_id", "BlinkOrderId", "OrderJson_snippet"]],
+                                                    width="stretch",
+                                                    hide_index=True,
+                                                    height=240,
+                                                )
+                                        except Exception:
+                                            pass
+                    except Exception as e:
+                        st.warning(f"Diagnostics unavailable due to error: {e}")
 
             st.markdown("---")
             if _allow("Employee Totals (No Sales/Candelahns)"):
@@ -1088,11 +1215,11 @@ class QRCommissionTab:
         else:
             st.info("No QR/Blinkco transaction data available.")
 
-    def _fetch_qr_commission_data(self, start_str: str, end_exclusive_str: str, branch_ids: List[int], mode: str) -> pd.DataFrame:
+    def _fetch_qr_commission_data(self, start_str: str, end_date_str: str, branch_ids: List[int], mode: str) -> pd.DataFrame:
         """Fetch Blinkco transactions at sale level."""
-        return _cached_qr_commission_data(start_str, end_exclusive_str, branch_ids, mode)
+        return _cached_qr_commission_data(start_str, end_date_str, branch_ids, mode)
 
-    def _fetch_total_sales_data(self, start_str: str, end_exclusive_str: str, branch_ids: List[int], mode: str) -> pd.DataFrame:
+    def _fetch_total_sales_data(self, start_str: str, end_date_str: str, branch_ids: List[int], mode: str) -> pd.DataFrame:
         """Fetch total sales (all order types) by employee and branch."""
         conn = pool.get_connection("candelahns")
         total_query = f"""
@@ -1108,11 +1235,11 @@ class QRCommissionTab:
         LEFT JOIN tblDefShopEmployees e ON s.employee_id = e.shop_employee_id
         LEFT JOIN tblDefShops sh ON s.shop_id = sh.shop_id
         WHERE s.sale_date >= ?
-          AND s.sale_date < ?
+          AND s.sale_date < DATEADD(DAY, 1, ?)
           AND s.shop_id IN ({placeholders(len(branch_ids))})
         """
 
-        total_params: List = [start_str, end_exclusive_str] + branch_ids
+        total_params: List = [start_str, end_date_str] + branch_ids
         if mode == "Filtered":
             if BLOCKED_NAMES:
                 total_query += f" AND s.Cust_name NOT IN ({placeholders(len(BLOCKED_NAMES))})"
@@ -1134,21 +1261,21 @@ class QRCommissionTab:
         """
         return pd.read_sql(total_query, conn, params=total_params)
 
-    def _fetch_sales_summary_combined(self, start_str: str, end_exclusive_str: str, branch_ids: List[int], mode: str) -> pd.DataFrame:
+    def _fetch_sales_summary_combined(self, start_str: str, end_date_str: str, branch_ids: List[int], mode: str) -> pd.DataFrame:
         """Fetch combined sales summary (all + blinkco) by employee and branch in one query."""
-        return _cached_sales_summary_combined(start_str, end_exclusive_str, branch_ids, mode)
+        return _cached_sales_summary_combined(start_str, end_date_str, branch_ids, mode)
 
-    def _fetch_blink_raw_orders(self, start_str: str, end_exclusive_str: str) -> pd.DataFrame:
-        return _cached_blink_raw_orders(start_str, end_exclusive_str)
+    def _fetch_blink_raw_orders(self, start_str: str, end_date_str: str) -> pd.DataFrame:
+        return _cached_blink_raw_orders(start_str, end_date_str)
 
-    def _fetch_qr_product_sales_data(self, start_str: str, end_exclusive_str: str, branch_ids: List[int], mode: str) -> pd.DataFrame:
+    def _fetch_qr_product_sales_data(self, start_str: str, end_date_str: str, branch_ids: List[int], mode: str) -> pd.DataFrame:
         """Fetch Blinkco line-item product sales for product-wise commission."""
-        return _cached_qr_product_sales_data(start_str, end_exclusive_str, branch_ids, mode)
+        return _cached_qr_product_sales_data(start_str, end_date_str, branch_ids, mode)
 
     def _fetch_non_blinkco_employee_summary(
         self,
         start_str: str,
-        end_exclusive_str: str,
+        end_date_str: str,
         branch_ids: List[int],
         mode: str,
     ) -> pd.DataFrame:
@@ -1167,11 +1294,11 @@ class QRCommissionTab:
         LEFT JOIN tblDefShopEmployees e ON s.employee_id = e.shop_employee_id
         LEFT JOIN tblDefShops sh ON s.shop_id = sh.shop_id
         WHERE s.sale_date >= ?
-          AND s.sale_date < ?
+          AND s.sale_date < DATEADD(DAY, 1, ?)
           AND s.shop_id IN ({placeholders(len(branch_ids))})
           AND (s.external_ref_type IS NULL OR s.external_ref_type <> 'Blinkco order')
         """
-        params: List = [start_str, end_exclusive_str] + branch_ids
+        params: List = [start_str, end_date_str] + branch_ids
         if mode == "Filtered":
             if BLOCKED_NAMES:
                 non_q += f" AND s.Cust_name NOT IN ({placeholders(len(BLOCKED_NAMES))})"

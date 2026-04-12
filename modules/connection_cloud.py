@@ -26,7 +26,7 @@ def _build_kdsdb_conn_str() -> str:
       - KDSDB_AUTH (windows|sql; default: windows locally, sql on cloud)
       - KDSDB_UID / KDSDB_PWD (for sql auth)
       - KDSDB_DRIVER (default: ODBC Driver 17 for SQL Server)
-      - KDSDB_DRIVER_WINDOWS (default: SQL Server)
+      - KDSDB_DRIVER_WINDOWS (default: ODBC Driver 17 for SQL Server)
     """
     explicit = os.environ.get("KDSDB_CONN_STR")
     if explicit:
@@ -39,8 +39,10 @@ def _build_kdsdb_conn_str() -> str:
     default_auth = "sql" if is_streamlit_cloud() else "windows"
     auth = os.environ.get("KDSDB_AUTH", default_auth).strip().lower()
 
+    # Prefer modern ODBC drivers by default. Legacy "SQL Server" driver can cause SSL/credential errors
+    # on newer Windows setups and when connecting to remote instances.
     driver_sql = os.environ.get("KDSDB_DRIVER", "ODBC Driver 17 for SQL Server")
-    driver_windows = os.environ.get("KDSDB_DRIVER_WINDOWS", "SQL Server")
+    driver_windows = os.environ.get("KDSDB_DRIVER_WINDOWS", "ODBC Driver 17 for SQL Server")
 
     base = [
         f"SERVER={server};",
@@ -52,6 +54,9 @@ def _build_kdsdb_conn_str() -> str:
     if auth == "windows":
         base.insert(0, f"DRIVER={{{driver_windows}}};")
         base.append("Trusted_Connection=yes;")
+        # Make encryption behavior explicit (avoids SSL handshake errors on some clients).
+        base.append("Encrypt=no;")
+        base.append("TrustServerCertificate=yes;")
         return "".join(base)
 
     uid = os.environ.get("KDSDB_UID", "sa")
@@ -62,6 +67,7 @@ def _build_kdsdb_conn_str() -> str:
             f"UID={uid};",
             f"PWD={pwd};",
             "Encrypt=no;",
+            "TrustServerCertificate=yes;",
         ]
     )
     return "".join(base)
@@ -122,6 +128,8 @@ class EnhancedConnectionPool:
     def __init__(self):
         self.connections = {}
         self.lock = threading.Lock()
+        self._last_unhealthy_log_at: Dict[str, float] = {}
+        self._unhealthy_log_interval_sec = float(os.environ.get("DB_UNHEALTHY_LOG_INTERVAL_SEC", "60"))
         self.connection_stats = {
             'total_connections': 0,
             'active_connections': 0,
@@ -156,18 +164,39 @@ class EnhancedConnectionPool:
             # Health check before returning connection
             healthy, err = self._is_connection_healthy(self.connections[db_name])
             if not healthy:
-                if err is not None:
-                    logger.warning(
-                        f"Connection for {db_name} is unhealthy, recreating. Health error: {err}",
-                        exc_info=True,
-                    )
-                else:
-                    logger.warning(f"Connection for {db_name} is unhealthy, recreating...")
+                now = time.time()
+                last_logged = self._last_unhealthy_log_at.get(db_name, 0.0)
+                should_log = (now - last_logged) >= self._unhealthy_log_interval_sec
+                if should_log:
+                    if err is not None:
+                        logger.warning(
+                            f"Connection for {db_name} is unhealthy, recreating. "
+                            f"Health error: {err.__class__.__name__}: {err}"
+                        )
+                    else:
+                        logger.warning(f"Connection for {db_name} is unhealthy, recreating...")
+                    self._last_unhealthy_log_at[db_name] = now
                 try:
                     self.connections[db_name].close()
                 except:
                     pass
-                self.connections[db_name] = self._create_connection(db_name)
+                recreated = False
+                last_recreate_error: Optional[Exception] = None
+                for attempt in range(max(1, int(DatabaseConfig.MAX_RETRIES))):
+                    try:
+                        self.connections[db_name] = self._create_connection(db_name)
+                        recreated = True
+                        break
+                    except Exception as create_err:
+                        last_recreate_error = create_err
+                        if attempt < int(DatabaseConfig.MAX_RETRIES) - 1:
+                            delay = DatabaseConfig.RETRY_DELAY * (DatabaseConfig.RETRY_BACKOFF ** attempt)
+                            time.sleep(delay)
+                if not recreated:
+                    self.connection_stats['failed_connections'] += 1
+                    raise RuntimeError(
+                        f"Failed to recreate unhealthy connection for {db_name}"
+                    ) from last_recreate_error
             
             return self.connections[db_name]
 
@@ -183,7 +212,7 @@ class EnhancedConnectionPool:
         """Create enhanced Candelahns connection with optimized settings"""
         conn_str = (
             "DRIVER={ODBC Driver 17 for SQL Server};"
-            "SERVER=103.86.55.183,2001;"
+            "SERVER=103.86.55.183,10305;"
             "DATABASE=Candelahns;"
             "UID=ReadOnlyUser;"
             "PWD=902729@Rafy;"
@@ -191,10 +220,15 @@ class EnhancedConnectionPool:
             "TrustServerCertificate=yes;"
             f"Connection Timeout={DatabaseConfig.CONNECTION_TIMEOUT};"
             "MARS_Connection=yes;"
-            "MultipleActiveResultSets=yes;"
         )
         
-        conn = pyodbc.connect(conn_str, autocommit=False)
+        # NOTE: `MultipleActiveResultSets` is an ADO.NET attribute and can break ODBC connections
+        # with "Invalid connection string attribute". ODBC uses `MARS_Connection` instead.
+        conn = pyodbc.connect(
+            conn_str,
+            autocommit=False,
+            timeout=int(DatabaseConfig.CONNECTION_TIMEOUT),
+        )
         # Default query timeout for all cursors created from this connection.
         try:
             conn.timeout = int(DatabaseConfig.QUERY_TIMEOUT)
@@ -223,14 +257,20 @@ class EnhancedConnectionPool:
     
     def _is_connection_healthy(self, conn: pyodbc.Connection) -> tuple[bool, Exception | None]:
         """Check if connection is still healthy"""
+        cursor = None
         try:
             cursor = conn.cursor()
             cursor.execute("SELECT 1")
             cursor.fetchone()
-            cursor.close()
             return True, None
         except Exception as e:
             return False, e
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
     
     def close_all(self):
         """Close all connections"""
@@ -383,23 +423,31 @@ class EnhancedDatabaseConnection:
         """Connect to Candelahns DB with enhanced settings"""
         conn_str = (
             "DRIVER={ODBC Driver 17 for SQL Server};"
-            "SERVER=103.86.55.183,2001;"
+            "SERVER=103.86.55.183,10305;"
             "DATABASE=Candelahns;"
             "UID=ReadOnlyUser;"
             "PWD=902729@Rafy;"
             "Encrypt=no;"
             "TrustServerCertificate=yes;"
             f"Connection Timeout={DatabaseConfig.CONNECTION_TIMEOUT};"
-            f"Query Timeout={DatabaseConfig.QUERY_TIMEOUT};"
             "MARS_Connection=yes;"
-            "MultipleActiveResultSets=yes;"
             "Pooling=yes;"
             f"Max Pool Size={DatabaseConfig.POOL_SIZE};"
             f"Min Pool Size=1;"
             f"Connection Lifetime={DatabaseConfig.POOL_RECYCLE};"
         )
         
-        conn = pyodbc.connect(conn_str, autocommit=False)
+        # NOTE: `MultipleActiveResultSets` / `Query Timeout` are not reliable ODBC attributes and can trigger
+        # "Invalid connection string attribute". Use `MARS_Connection` and `conn.timeout` instead.
+        conn = pyodbc.connect(
+            conn_str,
+            autocommit=False,
+            timeout=int(DatabaseConfig.CONNECTION_TIMEOUT),
+        )
+        try:
+            conn.timeout = int(DatabaseConfig.QUERY_TIMEOUT)
+        except Exception:
+            pass
         
         # Set performance optimizations
         cursor = conn.cursor()

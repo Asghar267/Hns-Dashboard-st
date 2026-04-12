@@ -11,6 +11,51 @@ from typing import Tuple, Any
 import pandas as pd
 
 
+def _coerce_money_to_float(value: Any) -> float:
+    """
+    Convert a variety of money-like inputs to float.
+
+    Handles values like:
+    - 343127
+    - "343,127"
+    - "Rs 343,127.00"
+    - "PKR343127"
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return 0.0
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+    s = str(value).strip()
+    if not s:
+        return 0.0
+    # Try direct numeric after removing common separators/currency.
+    cleaned = (
+        s.replace(",", "")
+        .replace("PKR", "")
+        .replace("pkr", "")
+        .replace("Rs.", "")
+        .replace("RS.", "")
+        .replace("Rs", "")
+        .replace("rs", "")
+        .replace("₨", "")
+        .replace(" ", "")
+    )
+    try:
+        return float(cleaned)
+    except Exception:
+        # Fallback: extract first number-looking token (supports commas + decimals)
+        m = re.search(r"-?\d[\d,]*\.?\d*", s)
+        if not m:
+            return 0.0
+        try:
+            return float(m.group(0).replace(",", ""))
+        except Exception:
+            return 0.0
+
+
 def _walk_find_key(obj: Any, keys: Tuple[str, ...], depth: int = 0, max_depth: int = 6):
     if depth > max_depth:
         return None
@@ -57,13 +102,24 @@ def safe_json_order_fields(order_json: str) -> Tuple[float, int, int, str | None
         return 0.0, 0, 0, None, False
     try:
         payload = json.loads(order_json)
-        raw_total = _walk_find_key(payload, ("total_price", "totalPrice", "total", "grand_total"))
+        raw_total = _walk_find_key(
+            payload,
+            (
+                "total_price",
+                "totalPrice",
+                "total",
+                "grand_total",
+                "grandTotal",
+                "order_total",
+                "orderTotal",
+                "amount",
+                "payable",
+            ),
+        )
         raw_time = _walk_find_key(payload, ("order_time", "orderTime", "created_at", "createdAt", "order_date", "due_at", "dueAt"))
         items = _walk_find_items(payload)
 
-        total_price = 0.0
-        if raw_total is not None:
-            total_price = float(str(raw_total).strip())
+        total_price = _coerce_money_to_float(raw_total)
 
         total_qty = 0
         item_count = 0
@@ -84,13 +140,21 @@ def safe_json_order_fields(order_json: str) -> Tuple[float, int, int, str | None
         return total_price, total_qty, item_count, order_time, True
     except Exception:
         s = str(order_json)
-        m = re.search(r"\"total_price\"\\s*:\\s*\"?(-?\\d+(?:\\.\\d+)?)\"?", s)
+        # Fallback: try to extract common total keys even when JSON is malformed.
+        # Supports commas and decimals.
+        m = re.search(r"\"total_price\"\\s*:\\s*\"?(-?\\d[\\d,]*(?:\\.\\d+)?)\"?", s)
         if not m:
-            m = re.search(r"\"totalPrice\"\\s*:\\s*\"?(-?\\d+(?:\\.\\d+)?)\"?", s)
+            m = re.search(r"\"totalPrice\"\\s*:\\s*\"?(-?\\d[\\d,]*(?:\\.\\d+)?)\"?", s)
+        if not m:
+            m = re.search(r"\"grand_total\"\\s*:\\s*\"?(-?\\d[\\d,]*(?:\\.\\d+)?)\"?", s)
+        if not m:
+            m = re.search(r"\"grandTotal\"\\s*:\\s*\"?(-?\\d[\\d,]*(?:\\.\\d+)?)\"?", s)
+        if not m:
+            m = re.search(r"\"total\"\\s*:\\s*\"?(-?\\d[\\d,]*(?:\\.\\d+)?)\"?", s)
         if not m:
             return 0.0, 0, 0, None, False
         try:
-            return float(m.group(1)), 0, 0, None, True
+            return float(m.group(1).replace(",", "")), 0, 0, None, True
         except Exception:
             return 0.0, 0, 0, None, False
 

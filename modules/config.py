@@ -8,7 +8,7 @@ import os
 # BRANCH CONFIGURATION
 # Branch configuration
 # ========================
-SELECTED_BRANCH_IDS = [2, 3, 4, 6, 8, 10, 14]
+SELECTED_BRANCH_IDS = [2, 3, 4, 6, 8, 10, 14, 15]
 
 BRANCH_NAMES = {
     2: "Khadda Main Branch",
@@ -17,7 +17,19 @@ BRANCH_NAMES = {
     6: "TOWER",
     8: "North Nazimabad",
     10: "MALIR",
-    14: "FESTIVAL 2"
+    14: "FESTIVAL 2",
+    15: "Tipu Sultan",
+}
+
+# Branches to hide/remove from UI selection (matched against DB `tblDefShops.shop_name`).
+# Kept case-insensitive and whitespace-normalized in the filtering logic.
+EXCLUDED_BRANCH_NAMES = {
+    "wastages",
+    "franchise",
+    "highway",
+    "saba avenue",
+    "dry store",
+    "cold store",
 }
 
 # ========================
@@ -219,7 +231,8 @@ class AppConfig:
             {"label": "TOWER", "value": 6},
             {"label": "North Nazimabad", "value": 8},
             {"label": "MALIR", "value": 10},
-            {"label": "FESTIVAL 2", "value": 14}
+            {"label": "FESTIVAL 2", "value": 14},
+            {"label": "Tipu Sultan", "value": 15},
         ]
     
-    DEFAULT_BRANCHES = [2, 3, 4, 6, 8, 10, 14]
+    DEFAULT_BRANCHES = [2, 3, 4, 6, 8, 10, 14, 15]

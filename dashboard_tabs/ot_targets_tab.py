@@ -74,7 +74,10 @@ class OTTargetsTab:
                 st.info("No OT sales data available for this branch.")
                 return
             df_ot_branch = df_ot[df_ot["shop_id"] == shop_id].copy()
-            display_ot_notarget = df_ot_branch[["employee_name", "total_sale"]].copy()
+            cols = [c for c in ["employee_code", "employee_name", "total_sale"] if c in df_ot_branch.columns]
+            if not cols:
+                cols = ["employee_name", "total_sale"]
+            display_ot_notarget = df_ot_branch[cols].copy()
             display_ot_notarget["total_sale"] = display_ot_notarget["total_sale"].apply(format_currency)
             st.dataframe(display_ot_notarget, width="stretch", hide_index=True, height=420)
             return
@@ -149,8 +152,17 @@ class OTTargetsTab:
         df_perf["mtd_sale"] = df_perf["mtd_sale"].fillna(0)
 
         # Build OT table
-        ot_table = df_perf[["employee_name", "target_amount", "total_sale", "yesterday_sale", "mtd_sale"]].copy()
-        ot_table.columns = ["OT Name", "Target", "Current Sale", "Yesterday Achieved", "MTD Sale"]
+        src_cols = [c for c in ["employee_code", "employee_name", "target_amount", "total_sale", "yesterday_sale", "mtd_sale"] if c in df_perf.columns]
+        ot_table = df_perf[src_cols].copy()
+        rename_map = {
+            "employee_code": "Field Code",
+            "employee_name": "OT Name",
+            "target_amount": "Target",
+            "total_sale": "Current Sale",
+            "yesterday_sale": "Yesterday Achieved",
+            "mtd_sale": "MTD Sale",
+        }
+        ot_table = ot_table.rename(columns=rename_map)
 
         ot_table["Days in Month"] = days_in_month
         ot_table["Per-Day Target"] = ot_table["Target"] / days_in_month if days_in_month > 0 else 0
@@ -193,23 +205,23 @@ class OTTargetsTab:
         display_ot["Remaining"] = display_ot["Remaining"].apply(format_currency)
         display_ot["Achievement %"] = display_ot["Achievement %"].apply(lambda x: f"{x:.1f}%")
 
+        desired_cols = [
+            "Field Code",
+            "OT Name",
+            "Target",
+            "Per-Day Target",
+            "Yesterday Achieved",
+            "Today Target",
+            "MTD Sale",
+            "Remaining Target",
+            "Remaining Days",
+            "Next Day Target",
+            "Current Sale",
+            "Remaining",
+            "Achievement %",
+        ]
         st.dataframe(
-            display_ot[
-                [
-                    "OT Name",
-                    "Target",
-                    "Per-Day Target",
-                    "Yesterday Achieved",
-                    "Today Target",
-                    "MTD Sale",
-                    "Remaining Target",
-                    "Remaining Days",
-                    "Next Day Target",
-                    "Current Sale",
-                    "Remaining",
-                    "Achievement %",
-                ]
-            ],
+            display_ot[[c for c in desired_cols if c in display_ot.columns]],
             width="stretch",
             hide_index=True,
             height=400,

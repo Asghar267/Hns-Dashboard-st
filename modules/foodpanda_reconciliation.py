@@ -8,9 +8,11 @@ and verifies prices (Order Amount vs NT_amount) with a tolerance.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, List, Tuple
 
 import pandas as pd
+import streamlit as st
 
 from modules.database import build_filter_clause, placeholders, pool
 
@@ -21,6 +23,18 @@ REQUIRED_APPENDIX_A_COLS = [
     "Order Amount",
     "Outlet Name",
     "Vendor Code",
+]
+
+CALCULATED_ORDER_AMOUNT_COMPONENT_COLS = [
+    "Discount Paid By Restaurant",
+    "foodpanda Commission",
+    "Waiting Time Fee",
+    "SST on foodpanda commission",
+    "Online Payment",
+    "Payable Amount",
+    "Wastage Refund Amount",
+    "Sales Tax Collection",
+    "Income Tax Withholding",
 ]
 
 
@@ -50,7 +64,96 @@ def load_foodpanda_order_summary(file_obj, sheet_name: str = "Appendix A") -> pd
     out["excel_order_code_norm"] = out["excel_order_code"].map(_norm_code)
     out["excel_order_date"] = pd.to_datetime(out["Order Date"], errors="coerce")
     out["excel_order_amount"] = pd.to_numeric(out["Order Amount"], errors="coerce")
+
+    # Calculated Order Amount (best-effort):
+    # foodpanda Commission + Waiting Time Fee + SST on foodpanda commission + Online Payment
+    # + Payable Amount + Wastage Refund Amount + Sales Tax Collection + Income Tax Withholding
+    component_total = pd.Series(0.0, index=out.index, dtype="float64")
+    present_components: list[str] = []
+    for col in CALCULATED_ORDER_AMOUNT_COMPONENT_COLS:
+        if col not in out.columns:
+            continue
+        present_components.append(col)
+        out[f"excel_calc_{col}"] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+        component_total = component_total.add(out[f"excel_calc_{col}"], fill_value=0.0)
+
+    out["excel_calculated_order_amount"] = component_total
+    out["excel_calculated_order_amount_components"] = ", ".join(present_components) if present_components else ""
+    out["excel_calculated_order_amount_diff"] = (
+        out["excel_calculated_order_amount"] - out["excel_order_amount"].fillna(0.0)
+    )
     return out
+
+
+def load_tower_order_details(file_obj, sheet_name: str = "Order Details") -> pd.DataFrame:
+    """
+    Load Tower order details and normalize cancellation-related fields.
+
+    The Tower workbook uses a 2-row header. We flatten it to the visible second-row
+    column names so the reconciliation tab can map `Order ID` to `Order Code`.
+    """
+    df = pd.read_excel(file_obj, sheet_name=sheet_name, header=[0, 1])
+    df.columns = [
+        str(col[1]).strip() if isinstance(col, tuple) else str(col).strip()
+        for col in df.columns
+    ]
+
+    required = ["Order ID", "Cancellation reason"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns in '{sheet_name}': {missing}")
+
+    out = df.copy()
+    out["tower_order_code"] = out["Order ID"].astype(str).str.strip()
+    out["tower_order_code_norm"] = out["tower_order_code"].map(_norm_code)
+
+    for col in ["Cancellation reason", "Cancelled at", "Order status", "Has Complaint?", "Complaint Reason", "Cancellation owner"]:
+        if col in out.columns:
+            out[col] = (
+                out[col]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .replace({"None": "", "nan": ""})
+            )
+
+    keep_cols = ["tower_order_code", "tower_order_code_norm", "Cancellation reason"]
+    for optional_col in [
+        # Cancellation / complaint fields
+        "Cancelled at",
+        "Order status",
+        "Has Complaint?",
+        "Complaint Reason",
+        "Cancellation owner",
+        # Useful metadata for analytics/diagnostics
+        "Restaurant name",
+        "Store ID",
+        "Delivery Type",
+        "Payment type",
+        "Payment method",
+        "Order received at",
+        "Accepted at",
+    ]:
+        if optional_col in out.columns:
+            keep_cols.append(optional_col)
+
+    return (
+        out[keep_cols]
+        .drop_duplicates(subset=["tower_order_code_norm"], keep="first")
+        .reset_index(drop=True)
+    )
+
+
+def find_default_tower_workbook(search_root: str | Path = ".") -> Path | None:
+    """Return the newest local Tower workbook if one exists."""
+    root = Path(search_root)
+    matches = [
+        path for path in root.glob("Tower*.xlsx")
+        if path.is_file() and not path.name.startswith("~$")
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda path: path.stat().st_mtime)
 
 
 def _fetch_sales_for_codes(
@@ -108,6 +211,25 @@ def _fetch_sales_for_codes(
     out["adjustment_comments"] = out.get("adjustment_comments", "").fillna("").astype(str)
     out["Additional_Comments"] = out.get("Additional_Comments", "").fillna("").astype(str)
     out["external_ref_id"] = out.get("external_ref_id", "").fillna("").astype(str)
+    return _attach_db_order_code_cols(out)
+
+
+def _attach_db_order_code_cols(df: pd.DataFrame) -> pd.DataFrame:
+    """Attach db_order_code_raw/db_order_code_norm columns using existing heuristics."""
+    if df is None or df.empty:
+        return pd.DataFrame() if df is None else df
+
+    out = df.copy()
+    if "adjustment_comments" not in out.columns:
+        out["adjustment_comments"] = ""
+    if "Additional_Comments" not in out.columns:
+        out["Additional_Comments"] = ""
+    if "external_ref_id" not in out.columns:
+        out["external_ref_id"] = ""
+
+    out["adjustment_comments"] = out["adjustment_comments"].fillna("").astype(str)
+    out["Additional_Comments"] = out["Additional_Comments"].fillna("").astype(str)
+    out["external_ref_id"] = out["external_ref_id"].fillna("").astype(str)
 
     out["db_order_code_raw"] = (
         out["adjustment_comments"].astype(str).str.strip().replace({"None": "", "nan": ""})
@@ -122,8 +244,8 @@ def _fetch_sales_for_codes(
         out.loc[mask_empty, "db_order_code_raw"] = (
             out.loc[mask_empty, "external_ref_id"].astype(str).str.strip().replace({"None": "", "nan": ""})
         )
-    out["db_order_code_norm"] = out["db_order_code_raw"].map(_norm_code)
 
+    out["db_order_code_norm"] = out["db_order_code_raw"].map(_norm_code)
     return out
 
 
@@ -193,6 +315,53 @@ def fetch_foodpanda_sales_by_codes(
     # Deduplicate identical sale_id rows if a code matched multiple passes.
     out = out.drop_duplicates(subset=["sale_id"], keep="last").reset_index(drop=True)
     return out
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_foodpanda_sales_in_range(
+    start_date: str,
+    end_date: str,
+    branch_ids: List[int],
+    data_mode: str,
+) -> pd.DataFrame:
+    """Fetch all Food Panda sales in DB for a date range and branches (not restricted to Excel codes)."""
+    if not branch_ids:
+        return pd.DataFrame()
+
+    conn = pool.get_connection("candelahns")
+    filter_clause, filter_params = build_filter_clause(data_mode)
+    q = f"""
+    SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+    SELECT
+        s.sale_id,
+        s.sale_date,
+        s.shop_id,
+        sh.shop_name,
+        s.Cust_name,
+        s.NT_amount,
+        s.adjustment_comments,
+        s.Additional_Comments,
+        s.external_ref_type,
+        s.external_ref_id,
+        s.pos_code
+    FROM tblSales s WITH (NOLOCK)
+    LEFT JOIN tblDefShops sh WITH (NOLOCK) ON sh.shop_id = s.shop_id
+    WHERE s.sale_date >= ?
+      AND s.sale_date < DATEADD(DAY, 1, ?)
+      AND s.shop_id IN ({placeholders(len(branch_ids))})
+      AND s.Cust_name = 'Food Panda'
+      {filter_clause}
+    """
+    params = [start_date, end_date] + list(branch_ids) + list(filter_params)
+    df = pd.read_sql(q, conn, params=params)
+    if df.empty:
+        return df
+
+    df["sale_date"] = pd.to_datetime(df["sale_date"], errors="coerce")
+    df["NT_amount"] = pd.to_numeric(df["NT_amount"], errors="coerce").fillna(0.0)
+    df["sale_id"] = pd.to_numeric(df["sale_id"], errors="coerce").fillna(0).astype(int)
+    df["shop_id"] = pd.to_numeric(df["shop_id"], errors="coerce").fillna(0).astype(int)
+    return _attach_db_order_code_cols(df)
 
 
 @dataclass(frozen=True)

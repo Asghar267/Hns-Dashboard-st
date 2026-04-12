@@ -44,10 +44,28 @@ class TargetService:
                 df_targets_with_categories['category_name'].isin(allowed_categories)
             ]
             
-            # Set correct target_type
-            df_targets_with_categories['target_type'] = df_targets_with_categories['category_name'].apply(
-                lambda cat: 'Sale' if cat in sale_categories else ('Quantity' if cat in qty_categories else 'Sale')
-            )
+            def _normalize_target_type(v) -> str:
+                s = str(v or "").strip().lower()
+                if not s:
+                    return ""
+                if s.startswith("q") or "qty" in s or "quantity" in s:
+                    return "quantity"
+                if s.startswith("s") or "sale" in s or "amount" in s or "value" in s:
+                    return "amount"
+                return "amount"
+
+            # Prefer DB-provided target_type when present (e.g. 'quantity'), otherwise fallback to category lists.
+            has_db_type = "target_type" in df_targets_with_categories.columns and df_targets_with_categories["target_type"].notna().any()
+            if has_db_type:
+                norm = df_targets_with_categories["target_type"].map(_normalize_target_type)
+                fallback = df_targets_with_categories['category_name'].apply(
+                    lambda cat: 'amount' if cat in sale_categories else ('quantity' if cat in qty_categories else 'amount')
+                )
+                df_targets_with_categories["target_type"] = norm.where(norm.astype(str).str.len() > 0, fallback)
+            else:
+                df_targets_with_categories['target_type'] = df_targets_with_categories['category_name'].apply(
+                    lambda cat: 'amount' if cat in sale_categories else ('quantity' if cat in qty_categories else 'amount')
+                )
             
             # Get sales data for this branch
             df_sales_this_branch = df_line_item[df_line_item['shop_id'] == shop_id].copy()
@@ -84,7 +102,7 @@ class TargetService:
             
             # Calculate Current
             df_res['Current Sale'] = df_res.apply(
-                lambda row: row['total_line_value_incl_tax'] if row['target_type'] == 'Sale' else row['total_qty'], 
+                lambda row: row['total_line_value_incl_tax'] if row['target_type'] == 'amount' else row['total_qty'],
                 axis=1
             )
             

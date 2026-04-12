@@ -357,11 +357,11 @@ def build_khadda_diagnostics_snapshot(
 ) -> pd.DataFrame:
     """Build Khadda Diagnostics snapshot table (same columns as dashboard)."""
     qr_service = QRCommissionService()
-    end_exclusive = (pd.to_datetime(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
-    df_qr = qr_service.get_qr_commission_data(start_date, end_exclusive, [2], data_mode)
-    df_total_sales = qr_service.get_total_sales_data(start_date, end_exclusive, [2], data_mode)
-    df_blink_raw = qr_service.get_blink_raw_orders_for_qr_sales(start_date, end_exclusive, [2], data_mode)
+    # QRCommissionService expects end_date to be inclusive.
+    df_qr = qr_service.get_qr_commission_data(start_date, end_date, [2], data_mode)
+    df_total_sales = qr_service.get_total_sales_data(start_date, end_date, [2], data_mode)
+    df_blink_raw = qr_service.get_blink_raw_orders_for_qr_sales(start_date, end_date, [2], data_mode)
     df_merged = qr_service.process_qr_data(df_qr, df_blink_raw, commission_rate)
 
     if not df_merged.empty:
@@ -450,7 +450,6 @@ def build_khadda_non_blinkco_employee_snapshot(
     from modules.config import BLOCKED_COMMENTS, BLOCKED_NAMES
 
     conn = pool.get_connection("candelahns")
-    end_exclusive = (pd.to_datetime(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     q = """
     SELECT
         s.shop_id,
@@ -464,11 +463,11 @@ def build_khadda_non_blinkco_employee_snapshot(
     LEFT JOIN tblDefShopEmployees e ON s.employee_id = e.shop_employee_id
     LEFT JOIN tblDefShops sh ON s.shop_id = sh.shop_id
     WHERE s.sale_date >= ?
-      AND s.sale_date < ?
+      AND s.sale_date < DATEADD(DAY, 1, ?)
       AND s.shop_id = 2
       AND (s.external_ref_type IS NULL OR s.external_ref_type <> 'Blinkco order')
     """
-    params: List = [start_date, end_exclusive]
+    params: List = [start_date, end_date]
     if data_mode == "Filtered":
         if BLOCKED_NAMES:
             q += f" AND s.Cust_name NOT IN ({placeholders(len(BLOCKED_NAMES))})"
@@ -505,12 +504,11 @@ def build_khadda_combined_employee_snapshot(
     """Combined employee summary: fixed <=20% no-ref (1–10 Mar) + post-cutoff QR to end_date."""
     qr_service = QRCommissionService()
     fixed_start = "2026-03-01"
-    end_exclusive = (pd.to_datetime(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     # Fixed cutoff: include 1–11 Mar in no-ref <=20% logic
     cutoff_dt = pd.to_datetime("2026-03-12 00:00:00")
-    fixed_end_exclusive = cutoff_dt.strftime("%Y-%m-%d %H:%M:%S")
+    fixed_end_date = "2026-03-11"
 
-    df_non = qr_service.get_non_blinkco_sales_transactions(fixed_start, fixed_end_exclusive, [2], data_mode)
+    df_non = qr_service.get_non_blinkco_sales_transactions(fixed_start, fixed_end_date, [2], data_mode)
     if df_non is None or df_non.empty:
         fixed_sum = pd.DataFrame(columns=["shop_id", "shop_name", "employee_id", "employee_code", "employee_name", "tx_fixed", "sales_fixed"])
     else:
@@ -519,7 +517,7 @@ def build_khadda_combined_employee_snapshot(
         if not include_unassigned:
             no_ref = no_ref[no_ref["employee_name"].astype(str).str.strip().str.lower() != "online/unassigned"].copy()
 
-        raw = qr_service.get_blink_raw_orders(fixed_start, fixed_end_exclusive)
+        raw = qr_service.get_blink_raw_orders(fixed_start, fixed_end_date)
         within_20 = pd.DataFrame()
         if raw is not None and not raw.empty and not no_ref.empty:
             raw_prep = raw[["BlinkOrderId", "OrderJson", "CreatedAt"]].copy()
@@ -557,7 +555,7 @@ def build_khadda_combined_employee_snapshot(
         )
 
     post_start = cutoff_dt.strftime("%Y-%m-%d %H:%M:%S")
-    qr_post = qr_service.get_qr_commission_data(post_start, end_exclusive, [2], data_mode)
+    qr_post = qr_service.get_qr_commission_data(post_start, end_date, [2], data_mode)
     if qr_post is None or qr_post.empty:
         post_sum = pd.DataFrame(columns=["shop_id", "shop_name", "employee_id", "employee_code", "employee_name", "tx_post", "sales_post"])
     else:
@@ -608,12 +606,11 @@ def build_khadda_daily_employee_summaries(
     """Daily employee summaries for Khadda: fixed no-ref range + post-cutoff QR."""
     qr_service = QRCommissionService()
     fixed_start = "2026-03-01"
-    end_exclusive = (pd.to_datetime(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     # Fixed cutoff: include 1–11 Mar in no-ref <=20% logic
     cutoff_dt = pd.to_datetime("2026-03-12 00:00:00")
-    fixed_end_exclusive = cutoff_dt.strftime("%Y-%m-%d %H:%M:%S")
+    fixed_end_date = "2026-03-11"
 
-    df_non = qr_service.get_non_blinkco_sales_transactions(fixed_start, fixed_end_exclusive, [2], data_mode)
+    df_non = qr_service.get_non_blinkco_sales_transactions(fixed_start, fixed_end_date, [2], data_mode)
     if df_non is None or df_non.empty:
         fixed_daily = pd.DataFrame()
     else:
@@ -622,7 +619,7 @@ def build_khadda_daily_employee_summaries(
         if not include_unassigned:
             no_ref = no_ref[no_ref["employee_name"].astype(str).str.strip().str.lower() != "online/unassigned"].copy()
         # Apply <=20% price-diff logic using nearest Blink raw prices.
-        raw = qr_service.get_blink_raw_orders(fixed_start, fixed_end_exclusive)
+        raw = qr_service.get_blink_raw_orders(fixed_start, fixed_end_date)
         within_20 = pd.DataFrame()
         if raw is not None and not raw.empty and not no_ref.empty:
             raw_prep = raw[["BlinkOrderId", "OrderJson", "CreatedAt"]].copy()
@@ -661,7 +658,7 @@ def build_khadda_daily_employee_summaries(
         )
 
     post_start = cutoff_dt.strftime("%Y-%m-%d %H:%M:%S")
-    qr_post = qr_service.get_qr_commission_data(post_start, end_exclusive, [2], data_mode)
+    qr_post = qr_service.get_qr_commission_data(post_start, end_date, [2], data_mode)
     if qr_post is None or qr_post.empty:
         post_daily = pd.DataFrame()
     else:
@@ -700,7 +697,7 @@ def fetch_qr_employee_no_sales(
 
     This intentionally mirrors the QR Commission tab behavior:
     - Sale-level rows from tblSales where external_ref_type='Blinkco order'
-    - End date is inclusive (implemented as end-exclusive +1 day)
+    - End date is inclusive (handled in SQL; do not pass end_date+1 around)
     - Indoge totals come from parsed Blink raw JSON (tblInitialRawBlinkOrder)
     """
     if not branch_ids:
@@ -719,9 +716,7 @@ def fetch_qr_employee_no_sales(
             ]
         )
 
-    end_exclusive = (pd.to_datetime(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-
-    df_qr = QRCommissionService.get_qr_commission_data(start_date, end_exclusive, branch_ids, data_mode)
+    df_qr = QRCommissionService.get_qr_commission_data(start_date, end_date, branch_ids, data_mode)
     if df_qr is None or df_qr.empty:
         return pd.DataFrame(
             columns=[
@@ -745,9 +740,9 @@ def fetch_qr_employee_no_sales(
         OrderJson,
         CreatedAt
     FROM tblInitialRawBlinkOrder
-    WHERE CreatedAt >= ? AND CreatedAt < ?
+    WHERE CreatedAt >= ? AND CreatedAt < DATEADD(DAY, 1, ?)
     """
-    df_blink_raw = pd.read_sql(blink_q, conn, params=[start_date, end_exclusive])
+    df_blink_raw = pd.read_sql(blink_q, conn, params=[start_date, end_date])
     df_blink = prepare_blink_orders(df_blink_raw)
 
     df_qr = df_qr.copy()

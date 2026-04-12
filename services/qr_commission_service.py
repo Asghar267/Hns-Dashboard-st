@@ -24,7 +24,7 @@ class QRCommissionService:
     
     @staticmethod
     def get_qr_commission_data(start_date: str, end_date: str, branch_ids: List[int], mode: str) -> pd.DataFrame:
-        """Fetch Blinkco transactions at sale level."""
+        """Fetch Blinkco transactions at sale level (end_date is inclusive)."""
         conn = pool.get_connection("candelahns")
 
         qr_query = f"""
@@ -42,7 +42,7 @@ class QRCommissionService:
         LEFT JOIN tblDefShopEmployees e ON s.employee_id = e.shop_employee_id
         LEFT JOIN tblDefShops sh ON s.shop_id = sh.shop_id
         WHERE s.sale_date >= ?
-          AND s.sale_date < ?
+          AND s.sale_date < DATEADD(DAY, 1, ?)
           AND s.shop_id IN ({placeholders(len(branch_ids))})
           AND s.external_ref_type = 'Blinkco order'
         """
@@ -85,7 +85,7 @@ class QRCommissionService:
         LEFT JOIN tblDefShopEmployees e ON s.employee_id = e.shop_employee_id
         LEFT JOIN tblDefShops sh ON s.shop_id = sh.shop_id
         WHERE s.sale_date >= ?
-          AND s.sale_date < ?
+          AND s.sale_date < DATEADD(DAY, 1, ?)
           AND s.shop_id IN ({placeholders(len(branch_ids))})
           AND (s.external_ref_type <> 'Blinkco order' OR s.external_ref_type IS NULL)
         """
@@ -119,7 +119,7 @@ class QRCommissionService:
         LEFT JOIN tblDefShopEmployees e ON s.employee_id = e.shop_employee_id
         LEFT JOIN tblDefShops sh ON s.shop_id = sh.shop_id
         WHERE s.sale_date >= ?
-          AND s.sale_date < ?
+          AND s.sale_date < DATEADD(DAY, 1, ?)
           AND s.shop_id IN ({placeholders(len(branch_ids))})
         """
 
@@ -155,7 +155,7 @@ class QRCommissionService:
             OrderJson,
             CreatedAt
         FROM tblInitialRawBlinkOrder
-        WHERE CreatedAt >= ? AND CreatedAt < ?
+        WHERE CreatedAt >= ? AND CreatedAt < DATEADD(DAY, 1, ?)
         """
         return pd.read_sql(blink_raw_query, conn, params=[start_date, end_date])
 
@@ -181,7 +181,7 @@ class QRCommissionService:
             SELECT DISTINCT s.external_ref_id
             FROM tblSales s
             WHERE s.sale_date >= ?
-              AND s.sale_date < ?
+              AND s.sale_date < DATEADD(DAY, 1, ?)
               AND s.shop_id IN ({placeholders(len(branch_ids))})
               AND s.external_ref_type = 'Blinkco order'
         """
@@ -225,7 +225,7 @@ class QRCommissionService:
             SELECT DISTINCT s.external_ref_id
             FROM tblSales s
             WHERE s.sale_date >= ?
-              AND s.sale_date < ?
+              AND s.sale_date < DATEADD(DAY, 1, ?)
               AND s.shop_id IN ({placeholders(len(branch_ids))})
               AND (s.external_ref_type <> 'Blinkco order' OR s.external_ref_type IS NULL)
               AND s.external_ref_id IS NOT NULL
@@ -264,7 +264,7 @@ class QRCommissionService:
         FROM tblSales s
         INNER JOIN tblSalesLineItems li ON s.sale_id = li.sale_id
         WHERE s.sale_date >= ?
-          AND s.sale_date < ?
+          AND s.sale_date < DATEADD(DAY, 1, ?)
           AND s.shop_id IN ({placeholders(len(branch_ids))})
         """
         params: List = [start_date, end_date] + branch_ids
@@ -301,7 +301,7 @@ class QRCommissionService:
         LEFT JOIN tblDefProducts p ON pi.Product_ID = p.Product_ID
         LEFT JOIN tblDefShops sh ON s.shop_id = sh.shop_id
         WHERE s.sale_date >= ?
-          AND s.sale_date < ?
+          AND s.sale_date < DATEADD(DAY, 1, ?)
           AND s.shop_id IN ({placeholders(len(branch_ids))})
           AND s.external_ref_type = 'Blinkco order'
         """
@@ -436,7 +436,7 @@ class QRCommissionService:
         LEFT JOIN tblDefShopEmployees e ON s.employee_id = e.shop_employee_id
         LEFT JOIN tblDefShops sh ON s.shop_id = sh.shop_id
         WHERE s.sale_date >= ?
-          AND s.sale_date < ?
+          AND s.sale_date < DATEADD(DAY, 1, ?)
           AND s.shop_id IN ({placeholders(len(branch_ids))})
         """
 

@@ -11,8 +11,11 @@ from datetime import datetime
 # Import from existing modules
 from modules.database import (
     get_cached_branch_summary,
+    get_cached_branch_days_since_last_sale,
     get_cached_ot_data,
     get_cached_order_types,
+    get_cached_order_type_others_breakdown,
+    get_cached_order_type_others_order_takers,
     get_cached_daily_sales_by_branch,
     get_cached_product_monthly_sales_by_product,
     get_cached_targets,
@@ -38,6 +41,11 @@ def _cached_branch_summary(start_date: str, end_date: str, branches: tuple[int, 
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+def _cached_branch_health(branches: tuple[int, ...]):
+    return get_cached_branch_days_since_last_sale(list(branches))
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def _cached_ot_data(start_date: str, end_date: str, branches: tuple[int, ...], mode: str):
     return get_cached_ot_data(start_date, end_date, list(branches), mode)
 
@@ -45,6 +53,16 @@ def _cached_ot_data(start_date: str, end_date: str, branches: tuple[int, ...], m
 @st.cache_data(ttl=300, show_spinner=False)
 def _cached_order_types(start_date: str, end_date: str, branches: tuple[int, ...], mode: str):
     return get_cached_order_types(start_date, end_date, list(branches), mode)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_order_types_others(start_date: str, end_date: str, branches: tuple[int, ...], mode: str):
+    return get_cached_order_type_others_breakdown(start_date, end_date, list(branches), mode)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_order_types_others_ot(start_date: str, end_date: str, branches: tuple[int, ...], mode: str):
+    return get_cached_order_type_others_order_takers(start_date, end_date, list(branches), mode)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -160,6 +178,7 @@ class OverviewTab:
         
         # Display metrics with custom styling
         self._render_summary_metrics(total_sales, total_target, total_remaining, overall_achievement)
+        self._render_branch_health_widget()
         
         st.markdown("---")
         st.subheader("Top 5 Highlights")
@@ -239,6 +258,47 @@ class OverviewTab:
                     </div>
                 </div>
             """, unsafe_allow_html=True)
+
+    def _render_branch_health_widget(self):
+        """Render branch health diagnostics focused on recency."""
+        st.subheader("Branch Health")
+        df_health = self._session_cached(
+            "overview_branch_health",
+            lambda: _cached_branch_health(tuple(sorted(self.selected_branches))),
+        )
+        if df_health is None or df_health.empty:
+            st.info("Branch health data is unavailable for current branch selection.")
+            return
+
+        max_days = int(df_health["days_since_last_sale"].max()) if "days_since_last_sale" in df_health.columns else 0
+        stale_count = int((df_health["days_since_last_sale"] > 1).sum()) if "days_since_last_sale" in df_health.columns else 0
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Max Days Since Last Sale", f"{max_days}")
+        with col2:
+            st.metric("Branches Stale (>1 day)", f"{stale_count}")
+
+        display = df_health.copy()
+        display["last_sale_date"] = pd.to_datetime(display["last_sale_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        display["status"] = display["days_since_last_sale"].apply(
+            lambda days: "Fresh" if int(pd.to_numeric(days, errors="coerce") or 0) <= 1 else ("Warning" if int(pd.to_numeric(days, errors="coerce") or 0) <= 7 else "Stale")
+        )
+        styler = display[["shop_id", "shop_name", "last_sale_date", "days_since_last_sale", "status"]].style.apply(
+            lambda row: [
+                (
+                    "background-color: #d1fae5; color: #065f46; font-weight: 600;"
+                    if int(pd.to_numeric(row["days_since_last_sale"], errors="coerce") or 0) <= 1
+                    else (
+                        "background-color: #fef3c7; color: #92400e; font-weight: 600;"
+                        if int(pd.to_numeric(row["days_since_last_sale"], errors="coerce") or 0) <= 7
+                        else "background-color: #fee2e2; color: #991b1b; font-weight: 600;"
+                    )
+                ) if col == "status" else ""
+                for col in row.index
+            ],
+            axis=1,
+        )
+        self._render_table(styler, width="stretch", height=230)
 
     def _render_top_highlights(self):
         """Render top 5 highlights"""
@@ -432,6 +492,75 @@ class OverviewTab:
                 
                 self._render_table(display_df[['order_type', 'total_orders', 'total_sales', 'total_sales_pct']], 
                     width="stretch")
+
+                others_row = df_ot_display[df_ot_display["order_type"] == "Others"]
+                if not others_row.empty:
+                    with st.expander("Inspect 'Others' (what is inside)"):
+                        df_others = self._session_cached(
+                            "overview_order_types_others",
+                            lambda: _cached_order_types_others(
+                                self.start_date, self.end_date, tuple(sorted(self.selected_branches)), self.data_mode
+                            ),
+                        )
+
+                        if df_others is None or df_others.empty:
+                            st.info("No rows found inside 'Others' for the current filters/date range.")
+                        else:
+                            total_sales_all = float(df_ot_display["total_sales"].sum() or 0.0)
+                            total_sales_others = float(others_row["total_sales"].iloc[0] or 0.0)
+
+                            df_show = df_others.copy()
+                            if total_sales_others > 0:
+                                df_show["sales_pct_of_others"] = df_show["total_sales"] / total_sales_others * 100
+                            else:
+                                df_show["sales_pct_of_others"] = 0.0
+                            if total_sales_all > 0:
+                                df_show["sales_pct_of_total"] = df_show["total_sales"] / total_sales_all * 100
+                            else:
+                                df_show["sales_pct_of_total"] = 0.0
+
+                            df_show["total_sales"] = df_show["total_sales"].apply(lambda x: format_currency(float(x)))
+                            df_show["total_orders"] = df_show["total_orders"].apply(lambda x: f"{int(x):,}")
+                            df_show["sales_pct_of_others"] = df_show["sales_pct_of_others"].apply(lambda x: f"{x:.1f}%")
+                            df_show["sales_pct_of_total"] = df_show["sales_pct_of_total"].apply(lambda x: f"{x:.1f}%")
+
+                            self._render_table(
+                                df_show[["raw_order_type", "total_orders", "total_sales", "sales_pct_of_others", "sales_pct_of_total"]],
+                                width="stretch",
+                            )
+
+                        st.markdown("#### Others by Order Taker")
+                        df_others_ot = self._session_cached(
+                            "overview_order_types_others_ot",
+                            lambda: _cached_order_types_others_ot(
+                                self.start_date, self.end_date, tuple(sorted(self.selected_branches)), self.data_mode
+                            ),
+                        )
+                        if df_others_ot is None or df_others_ot.empty:
+                            st.info("No order-taker rows found inside 'Others' for the current filters/date range.")
+                        else:
+                            df_ot_show = df_others_ot.copy()
+                            total_sales_all = float(df_ot_display["total_sales"].sum() or 0.0)
+                            total_sales_others = float(others_row["total_sales"].iloc[0] or 0.0)
+
+                            if total_sales_others > 0:
+                                df_ot_show["sales_pct_of_others"] = df_ot_show["total_sales"] / total_sales_others * 100
+                            else:
+                                df_ot_show["sales_pct_of_others"] = 0.0
+                            if total_sales_all > 0:
+                                df_ot_show["sales_pct_of_total"] = df_ot_show["total_sales"] / total_sales_all * 100
+                            else:
+                                df_ot_show["sales_pct_of_total"] = 0.0
+
+                            df_ot_show["total_sales"] = df_ot_show["total_sales"].apply(lambda x: format_currency(float(x)))
+                            df_ot_show["total_orders"] = df_ot_show["total_orders"].apply(lambda x: f"{int(x):,}")
+                            df_ot_show["sales_pct_of_others"] = df_ot_show["sales_pct_of_others"].apply(lambda x: f"{x:.1f}%")
+                            df_ot_show["sales_pct_of_total"] = df_ot_show["sales_pct_of_total"].apply(lambda x: f"{x:.1f}%")
+
+                            self._render_table(
+                                df_ot_show[["shop_name", "employee_name", "total_orders", "total_sales", "sales_pct_of_others", "sales_pct_of_total"]],
+                                width="stretch",
+                            )
 
     def _render_export_options(self, df_branch_display: pd.DataFrame):
         """Render export options"""

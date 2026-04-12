@@ -49,7 +49,7 @@ def _render_price_only_match_table(
     qr_service: QRCommissionService,
     df_non_no_ref: pd.DataFrame,
     start_date_str: str,
-    end_exclusive: str,
+    end_date_str: str,
     branch_ids: List[int],
     data_mode: str,
     key_prefix: str,
@@ -60,7 +60,7 @@ def _render_price_only_match_table(
         st.info("No non-Blinkco rows without external_ref_id for price-only matching.")
         return
 
-    raw = qr_service.get_blink_raw_orders(start_date_str, end_exclusive)
+    raw = qr_service.get_blink_raw_orders(start_date_str, end_date_str)
     if raw is None or raw.empty:
         st.info("No Blink raw orders found in this period for price-only matching.")
         return
@@ -96,7 +96,7 @@ def _render_price_only_match_table(
         return pd.Series([default] * len(df), index=df.index)
 
     # Attach POS qty/item lines for non-blinkco rows
-    pos_stats = qr_service.get_pos_line_item_stats(start_date_str, end_exclusive, branch_ids, data_mode, blinkco_only=False)
+    pos_stats = qr_service.get_pos_line_item_stats(start_date_str, end_date_str, branch_ids, data_mode, blinkco_only=False)
     if pos_stats is not None and not pos_stats.empty:
         pos_stats = pos_stats.rename(columns={"pos_total_qty": "pos_total_qty", "pos_item_lines": "pos_item_lines"})
         non_ref = non_ref.merge(pos_stats, on="sale_id", how="left")
@@ -327,7 +327,7 @@ def _render_price_only_match_table(
     st.download_button(
         label="Download Employee Summary (Price-Only) Excel",
         data=export_excel(emp_sum.reset_index(drop=True), "Employee Summary Price-Only"),
-        file_name=f"price_only_employee_summary_{start_date_str}_to_{end_exclusive}.xlsx",
+        file_name=f"price_only_employee_summary_{start_date_str}_to_{end_date_str}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key=f"{key_prefix}_dl_price_only_emp_summary",
     )
@@ -361,7 +361,7 @@ def _render_price_only_match_table(
     st.download_button(
         label="Download Price-Only Match Excel",
         data=export_excel(filtered.reset_index(drop=True), "Price Only Match (Filtered)"),
-        file_name=f"price_only_match_{start_date_str}_to_{end_exclusive}.xlsx",
+        file_name=f"price_only_match_{start_date_str}_to_{end_date_str}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key=f"{key_prefix}_dl_price_only_match",
     )
@@ -378,7 +378,6 @@ def render_khadda_diagnostics_tab(
     # Fixed cutoff: include 1–11 Mar in <=20% no-ref logic, then post-cutoff from 12 Mar onward.
     original_start_date_str = start_date_str
     original_end_date_str = end_date_str
-    original_end_exclusive = (pd.to_datetime(original_end_date_str) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     start_date_str = "2026-03-01"
     cutoff_dt = pd.Timestamp("2026-03-12 00:00:00")
     cutoff_dt_str = cutoff_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -401,8 +400,6 @@ def render_khadda_diagnostics_tab(
         key=f"{key_prefix}_commission_rate",
         help="Commission percentage for QR sales",
     )
-    end_exclusive = cutoff_dt_str
-
     c1, c2, c3 = st.columns(3)
     with c1:
         employee_search = st.text_input("Search Employee", key=f"{key_prefix}_employee_search")
@@ -417,9 +414,9 @@ def render_khadda_diagnostics_tab(
 
     # Blinkco side (Candela vs Indoge) + POS non-blinkco totals come from split report.
     with perf_trace("Khadda fetch (qr/total/blink raw)", "db"):
-        df_qr = qr_service.get_qr_commission_data(start_date_str, end_exclusive, [2], data_mode)
-        df_total_sales = qr_service.get_total_sales_data(start_date_str, end_exclusive, [2], data_mode)
-        df_blink_raw = qr_service.get_blink_raw_orders_for_qr_sales(start_date_str, end_exclusive, [2], data_mode)
+        df_qr = qr_service.get_qr_commission_data(start_date_str, end_date_str, [2], data_mode)
+        df_total_sales = qr_service.get_total_sales_data(start_date_str, end_date_str, [2], data_mode)
+        df_blink_raw = qr_service.get_blink_raw_orders_for_qr_sales(start_date_str, end_date_str, [2], data_mode)
     with perf_trace("Khadda process (merge)", "processing"):
         df_merged = qr_service.process_qr_data(df_qr, df_blink_raw, commission_rate)
 
@@ -545,7 +542,7 @@ def render_khadda_diagnostics_tab(
 
         # Reuse the same best-effort logic as QR tab, but in standalone form.
         try:
-            df_non_blink = qr_service.get_non_blinkco_sales_transactions(start_date_str, end_exclusive, [2], data_mode)
+            df_non_blink = qr_service.get_non_blinkco_sales_transactions(start_date_str, end_date_str, [2], data_mode)
             if df_non_blink is None or df_non_blink.empty:
                 st.info("No non-Blinkco transactions found for Khadda in this period.")
                 df_non_blink = pd.DataFrame()
@@ -588,7 +585,7 @@ def render_khadda_diagnostics_tab(
                     non_ref_summary.get("total_sale", 0), errors="coerce"
                 ).fillna(0.0)
                 if not non_ref_summary.empty:
-                    raw = qr_service.get_blink_raw_orders(start_date_str, end_exclusive)
+                    raw = qr_service.get_blink_raw_orders(start_date_str, end_date_str)
                     if raw is not None and not raw.empty:
                         raw_prep = raw[["BlinkOrderId", "OrderJson", "CreatedAt"]].copy()
                         raw_prep = prepare_blink_orders(raw_prep)
@@ -624,7 +621,7 @@ def render_khadda_diagnostics_tab(
                 # Post-cutoff uses QR sales with external_ref_id up to sidebar end date (for daily summaries)
                 post_start = cutoff_dt_str
                 if pd.to_datetime(original_end_date_str) >= pd.to_datetime(post_start):
-                    qr_post_emp = qr_service.get_qr_commission_data(post_start, original_end_exclusive, [2], data_mode)
+                    qr_post_emp = qr_service.get_qr_commission_data(post_start, original_end_date_str, [2], data_mode)
                 else:
                     qr_post_emp = pd.DataFrame()
                 if qr_post_emp is not None and not qr_post_emp.empty:
@@ -768,10 +765,9 @@ def render_khadda_diagnostics_tab(
                 def _fetch_qr_range(range_start: pd.Timestamp, range_end: pd.Timestamp) -> pd.DataFrame:
                     if range_start > range_end:
                         return pd.DataFrame()
-                    end_excl = (range_end + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
                     df = qr_service.get_qr_commission_data(
                         range_start.strftime("%Y-%m-%d"),
-                        end_excl,
+                        range_end.strftime("%Y-%m-%d"),
                         [2],
                         data_mode,
                     )
@@ -1056,7 +1052,7 @@ def render_khadda_diagnostics_tab(
                         qr_service=qr_service,
                         df_non_no_ref=df_non_no_ref,
                         start_date_str=start_date_str,
-                        end_exclusive=end_exclusive,
+                        end_date_str=end_date_str,
                         branch_ids=[2],
                         data_mode=data_mode,
                         key_prefix=f"{key_prefix}_khadda_price_only",
@@ -1071,7 +1067,7 @@ def render_khadda_diagnostics_tab(
                         s2.metric("1-11 Mar sales <=20%", format_currency(float(within_20["total_sale"].sum()) if not within_20.empty else 0.0))
                         post_start = cutoff_dt_str
                         if pd.to_datetime(original_end_date_str) >= pd.to_datetime(post_start):
-                            qr_post = qr_service.get_qr_commission_data(post_start, original_end_exclusive, [2], data_mode)
+                            qr_post = qr_service.get_qr_commission_data(post_start, original_end_date_str, [2], data_mode)
                             if qr_post is not None and not qr_post.empty:
                                 qr_post["external_ref_id"] = qr_post["external_ref_id"].astype(str).str.strip().replace("None", "")
                                 qr_post = qr_post[qr_post["external_ref_id"] != ""].copy()
@@ -1091,7 +1087,7 @@ def render_khadda_diagnostics_tab(
 
             # Final detailed transactions table (Khadda)
             if not df_non_with_ref.empty:
-                df_non_raw = qr_service.get_blink_raw_orders_for_non_blink_sales(start_date_str, end_exclusive, [2], data_mode)
+                df_non_raw = qr_service.get_blink_raw_orders_for_non_blink_sales(start_date_str, end_date_str, [2], data_mode)
                 non_with_ref = qr_service.process_qr_data(df_non_with_ref, df_non_raw, commission_rate)
             else:
                 non_with_ref = pd.DataFrame()
@@ -1240,7 +1236,7 @@ def render_khadda_diagnostics_tab(
         except Exception as e:
             st.warning(f"Khadda non-Blinkco diagnostics skipped due to error: {e}")
             if not df_non_with_ref.empty:
-                df_non_raw = qr_service.get_blink_raw_orders_for_non_blink_sales(start_date_str, end_exclusive, [2], data_mode)
+                df_non_raw = qr_service.get_blink_raw_orders_for_non_blink_sales(start_date_str, end_date_str, [2], data_mode)
                 non_with_ref = qr_service.process_qr_data(df_non_with_ref, df_non_raw, commission_rate)
             else:
                 non_with_ref = pd.DataFrame()

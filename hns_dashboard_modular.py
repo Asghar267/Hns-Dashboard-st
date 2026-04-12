@@ -33,6 +33,7 @@ except Exception:
 from dashboard_tabs.category_coverage_tab import CategoryCoverageTab
 from dashboard_tabs.chef_sales_tab import ChefSalesTab
 from dashboard_tabs.chef_targets_tab import ChefTargetsTab
+from dashboard_tabs.database_health_tab import DatabaseHealthDiagnosticsTab
 from dashboard_tabs.food_panda_tab import FoodPandaTab
 from dashboard_tabs.material_cost_commission_tab import MaterialCostCommissionTab
 from dashboard_tabs.order_takers_tab import OrderTakersTab
@@ -40,6 +41,7 @@ from dashboard_tabs.overview_tab import OverviewTab
 from dashboard_tabs.ot_targets_tab import OTTargetsTab
 from dashboard_tabs.pivot_tables_tab import PivotTablesTab
 from dashboard_tabs.ramzan_deals_tab import RamzanDealsTab
+from dashboard_tabs.web_items_export_tab import WebItemsExportTab
 try:
     from dashboard_tabs.trends_analytics_tab import TrendsAnalyticsTab
 except Exception as _trends_import_err:
@@ -56,7 +58,12 @@ from modules.auth import (
     upsert_user,
 )
 from modules.config import SELECTED_BRANCH_IDS, BRANCH_NAMES
-from modules.database import refresh_all_caches, warm_up_caches
+from modules.database import (
+    get_cached_all_branches_lookup,
+    get_cached_branch_lookup,
+    refresh_all_caches,
+    warm_up_caches,
+)
 from modules.qr_tab_renderer import (
     render_khadda_diagnostics_tab,
     render_qr_tab,
@@ -161,13 +168,18 @@ def load_custom_css() -> None:
             background-color: {card_bg};
             border-radius: 5px;
         }}
-        /* Fullscreen dataframes: Streamlit uses different containers across versions.
-           Make the overlay full-screen and aggressively override inline heights so the
-           table uses the available viewport instead of leaving blank space. */
-        div[role="dialog"],
-        div[data-testid="stDialog"],
-        div[data-testid="stModal"],
-        div[aria-modal="true"] {{
+        /* Fullscreen dataframes (scoped):
+           Streamlit "Settings" and other built-in dialogs also use role="dialog".
+           Scope these rules to dialogs that actually contain a DataFrame/Table so we
+           don't blank the Settings modal. Uses :has(...) (supported in modern Chromium). */
+        div[role="dialog"]:has([data-testid="stDataFrame"]),
+        div[role="dialog"]:has([data-testid="stTable"]),
+        div[data-testid="stDialog"]:has([data-testid="stDataFrame"]),
+        div[data-testid="stDialog"]:has([data-testid="stTable"]),
+        div[data-testid="stModal"]:has([data-testid="stDataFrame"]),
+        div[data-testid="stModal"]:has([data-testid="stTable"]),
+        div[aria-modal="true"]:has([data-testid="stDataFrame"]),
+        div[aria-modal="true"]:has([data-testid="stTable"]) {{
             position: fixed !important;
             inset: 0 !important;
             width: 100vw !important;
@@ -179,19 +191,27 @@ def load_custom_css() -> None:
         }}
 
         /* Modal/dialog content wrapper */
-        div[role="dialog"] > div,
-        div[data-testid="stDialog"] > div,
-        div[data-testid="stModal"] > div,
-        div[data-testid="stModalContent"] {{
+        div[role="dialog"]:has([data-testid="stDataFrame"]) > div,
+        div[role="dialog"]:has([data-testid="stTable"]) > div,
+        div[data-testid="stDialog"]:has([data-testid="stDataFrame"]) > div,
+        div[data-testid="stDialog"]:has([data-testid="stTable"]) > div,
+        div[data-testid="stModal"]:has([data-testid="stDataFrame"]) > div,
+        div[data-testid="stModal"]:has([data-testid="stTable"]) > div,
+        div[data-testid="stModalContent"]:has([data-testid="stDataFrame"]),
+        div[data-testid="stModalContent"]:has([data-testid="stTable"]) {{
             height: 100vh !important;
             max-height: 100vh !important;
         }}
 
         /* Force a flex layout so the table area can expand instead of leaving blank space */
-        div[role="dialog"] > div,
-        div[data-testid="stDialog"] > div,
-        div[data-testid="stModal"] > div,
-        div[data-testid="stModalContent"] {{
+        div[role="dialog"]:has([data-testid="stDataFrame"]) > div,
+        div[role="dialog"]:has([data-testid="stTable"]) > div,
+        div[data-testid="stDialog"]:has([data-testid="stDataFrame"]) > div,
+        div[data-testid="stDialog"]:has([data-testid="stTable"]) > div,
+        div[data-testid="stModal"]:has([data-testid="stDataFrame"]) > div,
+        div[data-testid="stModal"]:has([data-testid="stTable"]) > div,
+        div[data-testid="stModalContent"]:has([data-testid="stDataFrame"]),
+        div[data-testid="stModalContent"]:has([data-testid="stTable"]) {{
             display: flex !important;
             flex-direction: column !important;
             min-height: 0 !important;
@@ -199,31 +219,31 @@ def load_custom_css() -> None:
 
         /* The dataframe wrapper + resizable container + grid editor should take remaining height.
            Use calc(...) to beat inline px heights coming from st.dataframe(height=...). */
-        div[role="dialog"] [data-testid="stDataFrame"],
-        div[data-testid="stDialog"] [data-testid="stDataFrame"],
-        div[data-testid="stModal"] [data-testid="stDataFrame"],
-        div[aria-modal="true"] [data-testid="stDataFrame"] {{
+        div[role="dialog"]:has([data-testid="stDataFrame"]) [data-testid="stDataFrame"],
+        div[data-testid="stDialog"]:has([data-testid="stDataFrame"]) [data-testid="stDataFrame"],
+        div[data-testid="stModal"]:has([data-testid="stDataFrame"]) [data-testid="stDataFrame"],
+        div[aria-modal="true"]:has([data-testid="stDataFrame"]) [data-testid="stDataFrame"] {{
             flex: 1 1 auto !important;
             min-height: 0 !important;
             height: calc(100vh - 4rem) !important;
             max-height: calc(100vh - 4rem) !important;
         }}
-        div[role="dialog"] [data-testid="stDataFrameResizable"],
-        div[data-testid="stDialog"] [data-testid="stDataFrameResizable"],
-        div[data-testid="stModal"] [data-testid="stDataFrameResizable"],
-        div[aria-modal="true"] [data-testid="stDataFrameResizable"],
-        div[role="dialog"] .glideDataEditor,
-        div[data-testid="stDialog"] .glideDataEditor,
-        div[data-testid="stModal"] .glideDataEditor,
-        div[aria-modal="true"] .glideDataEditor,
-        div[role="dialog"] [role="grid"],
-        div[data-testid="stDialog"] [role="grid"],
-        div[data-testid="stModal"] [role="grid"],
-        div[aria-modal="true"] [role="grid"],
-        div[role="dialog"] canvas,
-        div[data-testid="stDialog"] canvas,
-        div[data-testid="stModal"] canvas,
-        div[aria-modal="true"] canvas {{
+        div[role="dialog"]:has([data-testid="stDataFrame"]) [data-testid="stDataFrameResizable"],
+        div[data-testid="stDialog"]:has([data-testid="stDataFrame"]) [data-testid="stDataFrameResizable"],
+        div[data-testid="stModal"]:has([data-testid="stDataFrame"]) [data-testid="stDataFrameResizable"],
+        div[aria-modal="true"]:has([data-testid="stDataFrame"]) [data-testid="stDataFrameResizable"],
+        div[role="dialog"]:has([data-testid="stDataFrame"]) .glideDataEditor,
+        div[data-testid="stDialog"]:has([data-testid="stDataFrame"]) .glideDataEditor,
+        div[data-testid="stModal"]:has([data-testid="stDataFrame"]) .glideDataEditor,
+        div[aria-modal="true"]:has([data-testid="stDataFrame"]) .glideDataEditor,
+        div[role="dialog"]:has([data-testid="stDataFrame"]) [role="grid"],
+        div[data-testid="stDialog"]:has([data-testid="stDataFrame"]) [role="grid"],
+        div[data-testid="stModal"]:has([data-testid="stDataFrame"]) [role="grid"],
+        div[aria-modal="true"]:has([data-testid="stDataFrame"]) [role="grid"],
+        div[role="dialog"]:has([data-testid="stDataFrame"]) canvas,
+        div[data-testid="stDialog"]:has([data-testid="stDataFrame"]) canvas,
+        div[data-testid="stModal"]:has([data-testid="stDataFrame"]) canvas,
+        div[aria-modal="true"]:has([data-testid="stDataFrame"]) canvas {{
             flex: 1 1 auto !important;
             min-height: 0 !important;
             height: calc(100vh - 5rem) !important;
@@ -234,10 +254,10 @@ def load_custom_css() -> None:
         }}
 
         /* st.table fallback */
-        div[role="dialog"] [data-testid="stTable"],
-        div[data-testid="stDialog"] [data-testid="stTable"],
-        div[data-testid="stModal"] [data-testid="stTable"],
-        div[aria-modal="true"] [data-testid="stTable"] {{
+        div[role="dialog"]:has([data-testid="stTable"]) [data-testid="stTable"],
+        div[data-testid="stDialog"]:has([data-testid="stTable"]) [data-testid="stTable"],
+        div[data-testid="stModal"]:has([data-testid="stTable"]) [data-testid="stTable"],
+        div[aria-modal="true"]:has([data-testid="stTable"]) [data-testid="stTable"] {{
             flex: 1 1 auto !important;
             min-height: 0 !important;
             height: calc(100vh - 5rem) !important;
@@ -310,7 +330,7 @@ def render_user_management_tab(branch_name_map: dict) -> None:
 
         tab_options = [
             "Overview", "Order Takers", "Chef Sales", "Chef Targets", "Food Panda", "OT Targets",
-            "QR Commission", "Khadda Diagnostics", "Material Cost Commission",
+            "QR Commission", "Khadda Diagnostics", "Database Health Diagnostics", "Material Cost Commission",
             "Trends & Analytics", "Ramzan Deals", "Category Filters & Coverage", "Pivot Tables",
             "Admin & Snapshots",
         ]
@@ -583,15 +603,19 @@ def main() -> None:
 
     load_custom_css()
 
-    if st.session_state.get("authenticated", False):
-        if check_session_timeout():
-            logout_user()
-            st.warning("Session timed out. Please log in again.")
-            return
-        update_activity()
-    else:
-        authenticate_user()
-        return
+    auth_slot = st.empty()
+    if not st.session_state.get("authenticated", False):
+        with auth_slot.container():
+            authed = authenticate_user()
+        if not authed:
+            st.stop()
+        auth_slot.empty()
+
+    if check_session_timeout():
+        logout_user()
+        st.warning("Session timed out. Please log in again.")
+        st.stop()
+    update_activity()
 
     st.sidebar.title("Dashboard Controls")
 
@@ -653,14 +677,34 @@ def main() -> None:
         help="Filtered mode excludes blocked customers and comments",
     )
 
-    branch_name_map = {
-        2: "Khadda Main Branch", 3: "FESTIVAL", 4: "Rahat Commercial",
-        6: "TOWER", 8: "North Nazimabad", 10: "MALIR", 14: "FESTIVAL 2",
-    }
+    branch_name_map = {int(k): str(v) for k, v in BRANCH_NAMES.items()}
+    df_all_branches = get_cached_all_branches_lookup()
+    if df_all_branches is not None and not df_all_branches.empty:
+        try:
+            db_branch_name_map = {
+                int(row.shop_id): str(row.shop_name)
+                for row in df_all_branches.itertuples(index=False)
+                if pd.notna(row.shop_id)
+            }
+            if db_branch_name_map:
+                branch_name_map = db_branch_name_map
+        except Exception:
+            pass
+    if not branch_name_map:
+        branch_name_map = {int(b): f"Branch {b}" for b in SELECTED_BRANCH_IDS}
 
     allowed_branches = user_record.get("allowed_branches", SELECTED_BRANCH_IDS)
     if allowed_branches == "all":
-        allowed_branches = SELECTED_BRANCH_IDS
+        allowed_branches = sorted(branch_name_map.keys())
+    else:
+        try:
+            allowed_branches = [int(b) for b in allowed_branches]
+        except Exception:
+            allowed_branches = list(SELECTED_BRANCH_IDS)
+        if branch_name_map:
+            allowed_branches = [b for b in allowed_branches if b in branch_name_map]
+        if not allowed_branches:
+            allowed_branches = sorted(branch_name_map.keys()) if branch_name_map else list(SELECTED_BRANCH_IDS)
 
     selected_branches: List[int] = st.sidebar.multiselect(
         "Select Branches",
@@ -715,8 +759,8 @@ def main() -> None:
 
     warm_cache = st.sidebar.checkbox(
         "Warm Cache in Background",
-        value=st.session_state.get("warm_cache_enabled", True),
-        help="Preloads common queries after filters are set.",
+        value=st.session_state.get("warm_cache_enabled", False),
+        help="Preloads common queries after filters are set. If UI becomes unstable/blank, turn this off.",
     )
     st.session_state.warm_cache_enabled = warm_cache
     if warm_cache:
@@ -726,11 +770,6 @@ def main() -> None:
             def _warm():
                 warm_up_caches(start_date_str, end_date_str, selected_branches, data_mode, target_year, target_month, include_heavy=False)
             t = threading.Thread(target=_warm, daemon=True)
-            try:
-                from streamlit.runtime.scriptrunner import add_script_run_ctx
-                add_script_run_ctx(t)
-            except Exception:
-                pass
             t.start()
 
     if st.sidebar.button("Generate Snapshots", width="stretch", key="main_sidebar_snapshots"):
@@ -769,12 +808,29 @@ def main() -> None:
     exc_text = ",".join(map(str, badge_exc)) if badge_exc else "none"
     st.sidebar.caption(f"Category Filters | Included: {inc_text} | Excluded: {exc_text}")
 
+    allowed_branch_ids_normalized = [int(b) for b in allowed_branches]
+    db_lookup = get_cached_branch_lookup(allowed_branch_ids_normalized)
     branch_name_map = {int(k): str(v) for k, v in BRANCH_NAMES.items()}
+    if db_lookup is not None and not db_lookup.empty:
+        try:
+            db_map = {
+                int(row.shop_id): str(row.shop_name)
+                for row in db_lookup.itertuples(index=False)
+                if pd.notna(row.shop_id)
+            }
+            branch_name_map.update(db_map)
+        except Exception:
+            pass
+
     if not branch_name_map:
         branch_name_map = {int(b): f"Branch {b}" for b in selected_branches}
 
+    selected_set = set(int(b) for b in selected_branches)
+    allowed_set = set(allowed_branch_ids_normalized)
+    is_all_allowed_selected = selected_set == allowed_set
+
     branch_labels = [branch_name_map.get(int(b), f"Branch {b}") for b in selected_branches]
-    title_text = "HNS Sales Dashboard" if len(branch_labels) == len(SELECTED_BRANCH_IDS) else f"HNS Sales Dashboard: {', '.join(branch_labels)}"
+    title_text = "HNS Sales Dashboard" if is_all_allowed_selected else f"HNS Sales Dashboard: {', '.join(branch_labels)}"
 
     st.title(title_text)
     st.caption(f"Period: {start_date_str} to {end_date_str} | Mode: {data_mode}")
@@ -823,6 +879,12 @@ def main() -> None:
     def _render_material_cost():
         MaterialCostCommissionTab(start_date_str, end_date_str, selected_branches, data_mode).render()
 
+    def _render_database_health_diagnostics():
+        DatabaseHealthDiagnosticsTab(start_date_str, end_date_str, selected_branches, data_mode).render()
+
+    def _render_web_items_export():
+        WebItemsExportTab().render()
+
     def _render_trends_analytics():
         if TrendsAnalyticsTab is None:
             st.error(f"Trends & Analytics tab failed to import: {_TRENDS_IMPORT_ERROR}")
@@ -853,8 +915,8 @@ def main() -> None:
         if current_role != "admin":
             st.error("Admin & Snapshots is admin-only.")
             return
-        um_map = {2: "Khadda Main Branch", 3: "FESTIVAL", 4: "Rahat Commercial", 6: "TOWER", 8: "North Nazimabad", 10: "MALIR", 14: "FESTIVAL 2"}
-        render_user_management_tab(um_map)
+        render_user_management_tab(branch_name_map)
+
 
     tab_map = {
         'overview': _render_overview,
@@ -865,6 +927,8 @@ def main() -> None:
         'ot_targets': _render_ot_targets,
         'qr_commission': _render_qr_commission,
         'khadda_diagnostics': _render_khadda_diagnostics,
+        'database_health_diagnostics': _render_database_health_diagnostics,
+        'web_items_export': _render_web_items_export,
         'material_cost_commission': _render_material_cost,
         'trends_analytics': _render_trends_analytics,
         'ramzan_deals': _render_ramzan_deals,

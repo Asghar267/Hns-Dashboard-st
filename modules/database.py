@@ -33,6 +33,7 @@ from modules.config import (
     CATEGORY_FILTERS_FILE,
     DEFAULT_EXCLUDED_CATEGORY_IDS,
     DEFAULT_BRANCH_TARGETS,
+    EXCLUDED_BRANCH_NAMES,
 )
 from modules.utils import log_query_time
 
@@ -59,6 +60,28 @@ MEDIUM_CACHE_TTL = int(
 def placeholders(n: int) -> str:
     """Generate SQL placeholders"""
     return ", ".join(["?"] * n) if n > 0 else ""
+
+
+def _normalize_branch_name(name: object) -> str:
+    try:
+        text = str(name or "").strip().lower()
+    except Exception:
+        return ""
+    if not text:
+        return ""
+    # Collapse repeated whitespace so "Dry   Store" matches "dry store"
+    return " ".join(text.split())
+
+
+def _filter_excluded_branches(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty or "shop_name" not in df.columns:
+        return df
+    excluded = { _normalize_branch_name(n) for n in (EXCLUDED_BRANCH_NAMES or set()) }
+    excluded.discard("")
+    if not excluded:
+        return df
+    norm = df["shop_name"].map(_normalize_branch_name)
+    return df[~norm.isin(excluded)].copy()
 
 def build_filter_clause(data_mode: str) -> Tuple[str, List]:
     """Build WHERE clause for filtering blocked items."""
@@ -884,6 +907,7 @@ def get_cached_ot_data(
         es.shop_id,
         sh.shop_name,
         COALESCE(e.shop_employee_id, 0) AS employee_id,
+        LTRIM(RTRIM(COALESCE(e.field_Code, ''))) AS employee_code,
         COALESCE(e.field_name, 'Online/Unassigned') AS employee_name,
         COALESCE(es.total_sale, 0) AS total_sale
     FROM emp_sales es
@@ -899,6 +923,8 @@ def get_cached_ot_data(
         df = pd.read_sql(query, conn, params=params)
         if 'employee_id' in df.columns:
             df['employee_id'] = pd.to_numeric(df['employee_id'], errors='coerce').fillna(0).astype('int64')
+        if "employee_code" in df.columns:
+            df["employee_code"] = df["employee_code"].fillna("").astype(str)
         df['total_sale'] = df['total_sale'].astype(float)
         return df
     except Exception as e:
@@ -944,6 +970,7 @@ def get_cached_cashier_sales(
             es.shop_id,
             sh.shop_name,
             COALESCE(e.shop_employee_id, 0) AS employee_id,
+            LTRIM(RTRIM(COALESCE(e.field_Code, ''))) AS employee_code,
             COALESCE(e.field_name, 'Online/Unassigned') AS employee_name,
             COALESCE(es.total_sale, 0) AS total_sale
         FROM emp_sales es
@@ -957,6 +984,8 @@ def get_cached_cashier_sales(
         df = pd.read_sql(query, conn, params=params)
         if 'employee_id' in df.columns:
             df['employee_id'] = pd.to_numeric(df['employee_id'], errors='coerce').fillna(0).astype('int64')
+        if "employee_code" in df.columns:
+            df["employee_code"] = df["employee_code"].fillna("").astype(str)
         df['total_sale'] = df['total_sale'].astype(float)
         return df
     except Exception as e:
@@ -1123,6 +1152,227 @@ def get_cached_order_types(
         return df
     except Exception as e:
         st.error(f"Error fetching order types: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=MEDIUM_CACHE_TTL)
+def get_cached_order_type_others_breakdown(
+    start_date: str,
+    end_date: str,
+    branch_ids: List[int],
+    data_mode: str
+) -> pd.DataFrame:
+    """
+    Diagnose what is included in the 'Others' bucket for order_type analysis.
+
+    Returns the raw tblSales.Cust_name values (trimmed) that are NOT mapped to the known order types,
+    with orders and sales computed in the same way as get_cached_order_types (including optional
+    category filters).
+    """
+    filter_clause, filter_params = build_filter_clause(data_mode)
+    settings = get_saved_category_filters()
+    include_names = [str(x).strip() for x in settings.get("included_category_names", []) if str(x).strip()]
+    exclude_names = [str(x).strip() for x in settings.get("excluded_category_names", []) if str(x).strip()]
+    has_category_filters = bool(include_names or exclude_names)
+    category_clause, category_params = build_category_name_filter_clause("t")
+
+    # Must match the CASE mapping in get_cached_order_types.
+    known_order_types = [
+        "Food Panda",
+        "Takeaway",
+        "Web Online Paid Order",
+        "Cash Web Online Order",
+        "Dine IN",
+        "Credit Card South",
+        "HNS Credit Card",
+        "Delivery",
+    ]
+    known_list_sql = ", ".join(["'" + x.replace("'", "''") + "'" for x in known_order_types])
+
+    if not has_category_filters:
+        query = f"""
+        SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+        SELECT
+            CASE
+                WHEN s.Cust_name IS NULL THEN '(NULL)'
+                WHEN s.Cust_name = '' THEN '(Blank)'
+                ELSE CONCAT('>', s.Cust_name, '<')
+            END AS raw_order_type,
+            COUNT(DISTINCT s.sale_id) AS total_orders,
+            SUM(s.Nt_amount) AS total_sales
+        FROM tblSales s WITH (NOLOCK)
+        WHERE s.sale_date BETWEEN ? AND ?
+            AND s.shop_id IN ({placeholders(len(branch_ids))})
+            {filter_clause}
+            AND (s.Cust_name IS NULL OR s.Cust_name NOT IN ({known_list_sql}))
+        GROUP BY
+            CASE
+                WHEN s.Cust_name IS NULL THEN '(NULL)'
+                WHEN s.Cust_name = '' THEN '(Blank)'
+                ELSE CONCAT('>', s.Cust_name, '<')
+            END
+        ORDER BY total_sales DESC
+        """
+        params = [start_date, end_date] + branch_ids + filter_params
+    else:
+        query = f"""
+        SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+        WITH sale_lines AS (
+            SELECT
+                s.sale_id,
+                s.Cust_name AS cust_name_raw,
+                CASE
+                    WHEN s.Cust_name IS NULL THEN '(NULL)'
+                    WHEN s.Cust_name = '' THEN '(Blank)'
+                    ELSE CONCAT('>', s.Cust_name, '<')
+                END AS raw_order_type,
+                li.qty,
+                li.Unit_price,
+                s.Nt_amount,
+                SUM(li.qty * li.Unit_price) OVER (PARTITION BY s.sale_id) AS line_total
+            FROM tblSales s WITH (NOLOCK)
+            JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
+            LEFT JOIN (
+                SELECT
+                    Product_Item_ID,
+                    CAST(Product_code AS VARCHAR(50)) as Product_code,
+                    CAST(field_name AS VARCHAR(100)) as field_name
+                FROM TempProductBarcode WITH (NOLOCK)
+                UNION ALL
+                SELECT 2642, '0570', 'Deals'
+            ) t ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
+            WHERE s.sale_date BETWEEN ? AND ?
+                AND s.shop_id IN ({placeholders(len(branch_ids))})
+                {category_clause}
+                {filter_clause}
+        ),
+        others_sales AS (
+            SELECT
+                raw_order_type,
+                COUNT(DISTINCT sale_id) AS total_orders,
+                SUM((qty * Unit_price) / NULLIF(line_total, 0) * Nt_amount) AS total_sales
+            FROM sale_lines
+            WHERE (cust_name_raw IS NULL OR cust_name_raw NOT IN ({known_list_sql}))
+            GROUP BY raw_order_type
+        )
+        SELECT * FROM others_sales ORDER BY total_sales DESC
+        """
+        params = [start_date, end_date] + branch_ids + category_params + filter_params
+
+    try:
+        t0 = time.time()
+        conn = pool.get_connection("candelahns")
+        df = pd.read_sql(query, conn, params=params)
+        if not df.empty and "total_sales" in df.columns:
+            df["total_sales"] = df["total_sales"].astype(float)
+        _log_cached_query_time("get_cached_order_type_others_breakdown", t0)
+        return df
+    except Exception as e:
+        st.error(f"Error fetching Others breakdown: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=MEDIUM_CACHE_TTL)
+def get_cached_order_type_others_order_takers(
+    start_date: str,
+    end_date: str,
+    branch_ids: List[int],
+    data_mode: str
+) -> pd.DataFrame:
+    """
+    Diagnose which order takers are contributing to the 'Others' bucket.
+
+    Returns employee_name with orders and sales using the same 'Others' definition as
+    get_cached_order_types.
+    """
+    filter_clause, filter_params = build_filter_clause(data_mode)
+    settings = get_saved_category_filters()
+    include_names = [str(x).strip() for x in settings.get("included_category_names", []) if str(x).strip()]
+    exclude_names = [str(x).strip() for x in settings.get("excluded_category_names", []) if str(x).strip()]
+    has_category_filters = bool(include_names or exclude_names)
+    category_clause, category_params = build_category_name_filter_clause("t")
+
+    known_order_types = [
+        "Food Panda",
+        "Takeaway",
+        "Web Online Paid Order",
+        "Cash Web Online Order",
+        "Dine IN",
+        "Credit Card South",
+        "HNS Credit Card",
+        "Delivery",
+    ]
+    known_list_sql = ", ".join(["'" + x.replace("'", "''") + "'" for x in known_order_types])
+
+    if not has_category_filters:
+        query = f"""
+        SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+        SELECT
+            COALESCE(sh.shop_name, CONCAT('Branch ', CAST(s.shop_id AS VARCHAR(20)))) AS shop_name,
+            COALESCE(e.field_name, 'Online/Unassigned') AS employee_name,
+            COUNT(DISTINCT s.sale_id) AS total_orders,
+            SUM(s.Nt_amount) AS total_sales
+        FROM tblSales s WITH (NOLOCK)
+        LEFT JOIN tblDefShopEmployees e WITH (NOLOCK) ON s.employee_id = e.shop_employee_id
+        LEFT JOIN tblDefShops sh WITH (NOLOCK) ON s.shop_id = sh.shop_id
+        WHERE s.sale_date BETWEEN ? AND ?
+            AND s.shop_id IN ({placeholders(len(branch_ids))})
+            {filter_clause}
+            AND (s.Cust_name IS NULL OR s.Cust_name NOT IN ({known_list_sql}))
+        GROUP BY
+            COALESCE(sh.shop_name, CONCAT('Branch ', CAST(s.shop_id AS VARCHAR(20)))),
+            COALESCE(e.field_name, 'Online/Unassigned')
+        ORDER BY total_sales DESC, shop_name, employee_name
+        """
+        params = [start_date, end_date] + branch_ids + filter_params
+    else:
+        query = f"""
+        SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+        WITH sale_lines AS (
+            SELECT
+                s.sale_id,
+                s.Cust_name AS cust_name_raw,
+                COALESCE(sh.shop_name, CONCAT('Branch ', CAST(s.shop_id AS VARCHAR(20)))) AS shop_name,
+                COALESCE(e.field_name, 'Online/Unassigned') AS employee_name,
+                li.qty,
+                li.Unit_price,
+                s.Nt_amount,
+                SUM(li.qty * li.Unit_price) OVER (PARTITION BY s.sale_id) AS line_total
+            FROM tblSales s WITH (NOLOCK)
+            JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
+            LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t
+                ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
+            LEFT JOIN tblDefShopEmployees e WITH (NOLOCK) ON s.employee_id = e.shop_employee_id
+            LEFT JOIN tblDefShops sh WITH (NOLOCK) ON s.shop_id = sh.shop_id
+            WHERE s.sale_date BETWEEN ? AND ?
+                AND s.shop_id IN ({placeholders(len(branch_ids))})
+                {category_clause}
+                {filter_clause}
+        ),
+        others_sales AS (
+            SELECT
+                shop_name,
+                employee_name,
+                COUNT(DISTINCT sale_id) AS total_orders,
+                SUM((qty * Unit_price) / NULLIF(line_total, 0) * Nt_amount) AS total_sales
+            FROM sale_lines
+            WHERE (cust_name_raw IS NULL OR cust_name_raw NOT IN ({known_list_sql}))
+            GROUP BY shop_name, employee_name
+        )
+        SELECT * FROM others_sales ORDER BY total_sales DESC, shop_name, employee_name
+        """
+        params = [start_date, end_date] + branch_ids + category_params + filter_params
+
+    try:
+        t0 = time.time()
+        conn = pool.get_connection("candelahns")
+        df = pd.read_sql(query, conn, params=params)
+        if not df.empty and "total_sales" in df.columns:
+            df["total_sales"] = df["total_sales"].astype(float)
+        _log_cached_query_time("get_cached_order_type_others_order_takers", t0)
+        return df
+    except Exception as e:
+        st.error(f"Error fetching Others order takers breakdown: {e}")
         return pd.DataFrame()
 
 
@@ -2295,6 +2545,255 @@ def get_qr_employee_daily_summary(
         return df
     except Exception as e:
         st.error(f"Error fetching QR employee daily breakdown: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=DatabaseConfig.CACHE_TTL)
+def get_cached_branch_days_since_last_sale(
+    branch_ids: List[int],
+) -> pd.DataFrame:
+    """Return last sale date + days since last sale for selected branches."""
+    if not branch_ids:
+        return pd.DataFrame(columns=["shop_id", "shop_name", "last_sale_date", "days_since_last_sale"])
+
+    query = f"""
+    SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+    SELECT
+        s.shop_id,
+        COALESCE(sh.shop_name, CONCAT('Branch ', CAST(s.shop_id AS VARCHAR(20)))) AS shop_name,
+        MAX(CAST(s.sale_date AS DATE)) AS last_sale_date,
+        DATEDIFF(day, MAX(CAST(s.sale_date AS DATE)), CAST(GETDATE() AS DATE)) AS days_since_last_sale
+    FROM tblSales s WITH (NOLOCK)
+    LEFT JOIN tblDefShops sh WITH (NOLOCK) ON sh.shop_id = s.shop_id
+    WHERE s.shop_id IN ({placeholders(len(branch_ids))})
+    GROUP BY s.shop_id, COALESCE(sh.shop_name, CONCAT('Branch ', CAST(s.shop_id AS VARCHAR(20))))
+    ORDER BY s.shop_id;
+    """
+    params = branch_ids
+
+    try:
+        conn = pool.get_connection("candelahns")
+        df = pd.read_sql(query, conn, params=params)
+        if not df.empty:
+            df["last_sale_date"] = pd.to_datetime(df["last_sale_date"], errors="coerce")
+            df["days_since_last_sale"] = pd.to_numeric(df["days_since_last_sale"], errors="coerce").fillna(0).astype(int)
+        return df
+    except Exception as e:
+        st.error(f"Error fetching branch recency diagnostics: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=DatabaseConfig.CACHE_TTL)
+def get_cached_database_orphan_summary() -> pd.DataFrame:
+    """Return orphan counts for core sales relations."""
+    query = """
+    SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+    SELECT
+        (SELECT SUM(CASE WHEN s.sale_id IS NULL THEN 1 ELSE 0 END)
+         FROM tblSalesLineItems li WITH (NOLOCK)
+         LEFT JOIN tblSales s WITH (NOLOCK) ON s.sale_id = li.sale_id) AS lineitem_without_sale,
+        (SELECT SUM(CASE WHEN li.sale_id IS NULL THEN 1 ELSE 0 END)
+         FROM tblSales s WITH (NOLOCK)
+         LEFT JOIN (SELECT DISTINCT sale_id FROM tblSalesLineItems WITH (NOLOCK)) li
+             ON li.sale_id = s.sale_id) AS sales_without_lineitems;
+    """
+    try:
+        conn = pool.get_connection("candelahns")
+        df = pd.read_sql(query, conn)
+        return df
+    except Exception as e:
+        st.error(f"Error fetching orphan diagnostics: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=DatabaseConfig.CACHE_TTL)
+def get_cached_database_range_quality(
+    start_date: str,
+    end_date: str,
+    branch_ids: List[int],
+) -> pd.DataFrame:
+    """Return core data-quality stats for selected date range and branches."""
+    if not branch_ids:
+        return pd.DataFrame()
+
+    query = f"""
+    SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+    SELECT
+        COUNT(*) AS rows_total,
+        COUNT(DISTINCT s.sale_id) AS distinct_sales,
+        SUM(CASE WHEN s.Cust_name IS NULL THEN 1 ELSE 0 END) AS cust_name_null,
+        SUM(CASE WHEN s.Cust_name = '' THEN 1 ELSE 0 END) AS cust_name_blank,
+        SUM(CASE WHEN s.Cust_name IS NOT NULL AND LTRIM(RTRIM(s.Cust_name)) = '' THEN 1 ELSE 0 END) AS cust_name_whitespace,
+        SUM(CASE WHEN s.NT_amount IS NULL THEN 1 ELSE 0 END) AS nt_amount_null,
+        SUM(CASE WHEN s.NT_amount < 0 THEN 1 ELSE 0 END) AS nt_amount_negative,
+        SUM(CASE WHEN s.sale_date IS NULL THEN 1 ELSE 0 END) AS sale_date_null
+    FROM tblSales s WITH (NOLOCK)
+    WHERE s.sale_date BETWEEN ? AND ?
+      AND s.shop_id IN ({placeholders(len(branch_ids))});
+    """
+    params = [start_date, end_date] + branch_ids
+
+    try:
+        conn = pool.get_connection("candelahns")
+        return pd.read_sql(query, conn, params=params)
+    except Exception as e:
+        st.error(f"Error fetching range quality diagnostics: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=DatabaseConfig.CACHE_TTL)
+def get_cached_filter_impact_summary(
+    start_date: str,
+    end_date: str,
+    branch_ids: List[int],
+) -> pd.DataFrame:
+    """Return unfiltered vs filtered impact summary for selected range and branches."""
+    if not branch_ids:
+        return pd.DataFrame()
+
+    filtered_clause, filtered_params = build_filter_clause("Filtered")
+
+    q_unfiltered = f"""
+    SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+    SELECT
+        COUNT(DISTINCT s.sale_id) AS orders_unfiltered,
+        SUM(s.NT_amount) AS sales_unfiltered
+    FROM tblSales s WITH (NOLOCK)
+    WHERE s.sale_date BETWEEN ? AND ?
+      AND s.shop_id IN ({placeholders(len(branch_ids))});
+    """
+    q_filtered = f"""
+    SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+    SELECT
+        COUNT(DISTINCT s.sale_id) AS orders_filtered,
+        SUM(s.NT_amount) AS sales_filtered
+    FROM tblSales s WITH (NOLOCK)
+    WHERE s.sale_date BETWEEN ? AND ?
+      AND s.shop_id IN ({placeholders(len(branch_ids))})
+      {filtered_clause};
+    """
+    q_blocked_name = f"""
+    SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+    SELECT
+        COUNT(DISTINCT s.sale_id) AS blocked_name_orders,
+        SUM(s.NT_amount) AS blocked_name_sales
+    FROM tblSales s WITH (NOLOCK)
+    WHERE s.sale_date BETWEEN ? AND ?
+      AND s.shop_id IN ({placeholders(len(branch_ids))})
+      AND s.Cust_name IN ({placeholders(len(BLOCKED_NAMES))});
+    """
+    q_blocked_comment = f"""
+    SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+    SELECT
+        COUNT(DISTINCT s.sale_id) AS blocked_comment_orders,
+        SUM(s.NT_amount) AS blocked_comment_sales
+    FROM tblSales s WITH (NOLOCK)
+    WHERE s.sale_date BETWEEN ? AND ?
+      AND s.shop_id IN ({placeholders(len(branch_ids))})
+      AND s.Additional_Comments IN ({placeholders(len(BLOCKED_COMMENTS))});
+    """
+
+    base_params = [start_date, end_date] + branch_ids
+    filtered_query_params = base_params + filtered_params
+    blocked_name_params = base_params + BLOCKED_NAMES
+    blocked_comment_params = base_params + BLOCKED_COMMENTS
+
+    try:
+        conn = pool.get_connection("candelahns")
+        df_unf = pd.read_sql(q_unfiltered, conn, params=base_params)
+        df_flt = pd.read_sql(q_filtered, conn, params=filtered_query_params)
+        df_bname = pd.read_sql(q_blocked_name, conn, params=blocked_name_params)
+        df_bcomment = pd.read_sql(q_blocked_comment, conn, params=blocked_comment_params)
+
+        if df_unf.empty or df_flt.empty or df_bname.empty or df_bcomment.empty:
+            return pd.DataFrame()
+
+        out = pd.concat([df_unf, df_flt, df_bname, df_bcomment], axis=1)
+        for col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
+        out["orders_excluded_est"] = out["orders_unfiltered"] - out["orders_filtered"]
+        out["sales_excluded_est"] = out["sales_unfiltered"] - out["sales_filtered"]
+        return out
+    except Exception as e:
+        st.error(f"Error fetching filter impact diagnostics: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=DatabaseConfig.CACHE_TTL)
+def get_cached_stale_branches_all() -> pd.DataFrame:
+    """Return days since last sale for all branches present in tblSales."""
+    query = """
+    SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+    SELECT
+        s.shop_id,
+        COALESCE(sh.shop_name, CONCAT('Branch ', CAST(s.shop_id AS VARCHAR(20)))) AS shop_name,
+        MAX(CAST(s.sale_date AS DATE)) AS last_sale_date,
+        DATEDIFF(day, MAX(CAST(s.sale_date AS DATE)), CAST(GETDATE() AS DATE)) AS days_since_last_sale
+    FROM tblSales s WITH (NOLOCK)
+    LEFT JOIN tblDefShops sh WITH (NOLOCK) ON sh.shop_id = s.shop_id
+    GROUP BY s.shop_id, COALESCE(sh.shop_name, CONCAT('Branch ', CAST(s.shop_id AS VARCHAR(20))))
+    ORDER BY days_since_last_sale DESC, s.shop_id;
+    """
+
+    try:
+        conn = pool.get_connection("candelahns")
+        df = pd.read_sql(query, conn)
+        if not df.empty:
+            df["last_sale_date"] = pd.to_datetime(df["last_sale_date"], errors="coerce")
+            df["days_since_last_sale"] = pd.to_numeric(df["days_since_last_sale"], errors="coerce").fillna(0).astype(int)
+        return df
+    except Exception as e:
+        st.error(f"Error fetching stale branch diagnostics: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=DatabaseConfig.CACHE_TTL)
+def get_cached_branch_lookup(branch_ids: List[int]) -> pd.DataFrame:
+    """Return shop_id/shop_name lookup from tblDefShops for provided branch ids."""
+    if not branch_ids:
+        return pd.DataFrame(columns=["shop_id", "shop_name"])
+
+    query = f"""
+    SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+    SELECT
+        sh.shop_id,
+        sh.shop_name
+    FROM tblDefShops sh WITH (NOLOCK)
+    WHERE sh.shop_id IN ({placeholders(len(branch_ids))})
+    ORDER BY sh.shop_id;
+    """
+    params = branch_ids
+
+    try:
+        conn = pool.get_connection("candelahns")
+        df = pd.read_sql(query, conn, params=params)
+        if not df.empty:
+            df["shop_id"] = pd.to_numeric(df["shop_id"], errors="coerce").astype("Int64")
+        return _filter_excluded_branches(df)
+    except Exception as e:
+        _warn_once("branch_lookup_error", f"Branch lookup unavailable (DB connection). Details: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=DatabaseConfig.CACHE_TTL)
+def get_cached_all_branches_lookup() -> pd.DataFrame:
+    """Return shop_id/shop_name lookup for all branches in tblDefShops."""
+    query = """
+    SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+    SELECT
+        sh.shop_id,
+        sh.shop_name
+    FROM tblDefShops sh WITH (NOLOCK)
+    ORDER BY sh.shop_id;
+    """
+    try:
+        conn = pool.get_connection("candelahns")
+        df = pd.read_sql(query, conn)
+        if not df.empty:
+            df["shop_id"] = pd.to_numeric(df["shop_id"], errors="coerce").astype("Int64")
+        return _filter_excluded_branches(df)
+    except Exception as e:
+        _warn_once("all_branch_lookup_error", f"All-branch lookup unavailable (DB connection). Details: {e}")
         return pd.DataFrame()
 
 

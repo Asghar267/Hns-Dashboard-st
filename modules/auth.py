@@ -150,21 +150,31 @@ def check_session_timeout():
             return True
     return False
 
-def authenticate_user():
-    """Display login form and handle authentication with refresh persistence"""
+def authenticate_user() -> bool:
+    """
+    Display login UI and handle authentication with refresh persistence.
+
+    Returns True when authenticated for the current run.
+
+    Note: Avoid forcing `st.rerun()` during login; it can cause frontend delta-path errors
+    like \"Bad delta path index ...\". The caller should render the login UI inside a
+    placeholder and continue rendering the dashboard in the same run once authenticated.
+    """
+    if st.session_state.get("authenticated", False):
+        return True
+
     # Check for existing session token in URL
-    if not st.session_state.get("authenticated", False):
-        token = st.query_params.get("session")
-        if token:
-            username = validate_session(token)
-            if username:
-                user_rec = get_user_record(username)
-                if user_rec:
-                    st.session_state.authenticated = True
-                    st.session_state.username = username
-                    st.session_state.user = user_rec
-                    st.session_state.last_activity = datetime.now()
-                    st.rerun()
+    token = st.query_params.get("session")
+    if token:
+        username = validate_session(token)
+        if username:
+            user_rec = get_user_record(username)
+            if user_rec:
+                st.session_state.authenticated = True
+                st.session_state.username = username
+                st.session_state.user = user_rec
+                st.session_state.last_activity = datetime.now()
+                return True
 
     st.markdown("""
         <div style='text-align: center; padding: 50px;'>
@@ -174,7 +184,8 @@ def authenticate_user():
     """, unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns([1, 2, 1])
-    
+    logged_in = False
+
     with col2:
         with st.form("login_form"):
             st.subheader("Login")
@@ -192,11 +203,11 @@ def authenticate_user():
                     # Store session token for refresh persistence
                     token = save_session(username_input)
                     st.query_params["session"] = token
-                    
-                    st.success("✅ Login successful!")
-                    st.rerun()
+                    logged_in = True
                 else:
                     st.error("❌ Invalid username or password")
+
+    return bool(st.session_state.get("authenticated", False) or logged_in)
 
 
 def logout_user():

@@ -61,7 +61,7 @@ class AppConfig:
     # Default settings
     DEFAULT_START_DATE = "2025-01-01"
     DEFAULT_END_DATE = "2025-12-31"
-    DEFAULT_BRANCHES = [2, 3, 4, 6, 8, 10, 14]
+    DEFAULT_BRANCHES = [2, 3, 4, 6, 8, 10, 14, 15]
     DEFAULT_DATA_MODE = DataMode.ALL
     
 # Navbar & Tab configurations
@@ -75,6 +75,8 @@ class AppConfig:
         "OT Targets": {"icon": "trend", "description": "Order taker targets"},
         "QR Commission": {"icon": "qr", "description": "QR/Blinkco commission analysis"},
         "Khadda Diagnostics": {"icon": "search", "description": "Khadda data diagnostics"},
+        "Database Health Diagnostics": {"icon": "database", "description": "Database health checks: orphans, stale branches, blanks, and filter impact"},
+        "Web Items Export": {"icon": "download", "description": "Export web items (iswebitem=1) to Excel"},
         "Material Cost Commission": {"icon": "money", "description": "Material cost commissions"},
         "Trends & Analytics": {"icon": "chart", "description": "Trends and analytics"},
         "Ramzan Deals": {"icon": "moon", "description": "Ramzan special deals"},
@@ -132,7 +134,8 @@ class AppConfig:
             {"label": "Tower", "value": 6},
             {"label": "North Nazimabad", "value": 8},
             {"label": "Malir", "value": 10},
-            {"label": "Festival 2", "value": 14}
+            {"label": "Festival 2", "value": 14},
+            {"label": "Tipu Sultan", "value": 15},
         ]
     
     @classmethod

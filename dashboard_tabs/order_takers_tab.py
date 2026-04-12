@@ -94,6 +94,9 @@ class OrderTakersTab:
         df_cashier_sorted = df_cashier.sort_values('total_sale', ascending=False)
         display_cashier = df_cashier_sorted.copy()
         display_cashier['total_sale'] = display_cashier['total_sale'].apply(lambda x: format_currency(x))
+        cols = [c for c in ["shop_name", "employee_id", "employee_code", "employee_name", "total_sale"] if c in display_cashier.columns]
+        if cols:
+            display_cashier = display_cashier[cols]
         self._render_table(display_cashier, width="stretch", height=320)
 
 
@@ -144,6 +147,9 @@ class OrderTakersTab:
         # Format for display
         display_ot = df_ot_filtered.copy()
         display_ot['total_sale'] = display_ot['total_sale'].apply(lambda x: format_currency(x))
+        cols = [c for c in ["shop_name", "employee_id", "employee_code", "employee_name", "total_sale"] if c in display_ot.columns]
+        if cols:
+            display_ot = display_ot[cols]
         
         self._render_table(display_ot, width="stretch")
 
