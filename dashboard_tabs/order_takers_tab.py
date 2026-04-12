@@ -17,6 +17,12 @@ from modules.utils import (
     format_currency,
     exclude_employee_names
 )
+from modules.responsive import (
+    apply_plotly_responsive_layout,
+    clamp_dataframe_height,
+    get_responsive_context,
+    responsive_columns,
+)
 
 
 class OrderTakersTab:
@@ -32,6 +38,7 @@ class OrderTakersTab:
         self.df_ot = get_cached_ot_data(start_date, end_date, selected_branches, data_mode)
         self.df_employee_sales = get_cached_employee_sales(start_date, end_date, selected_branches)
         self.df_cashier_sales = get_cached_cashier_sales(start_date, end_date, selected_branches, data_mode)
+        self.responsive = get_responsive_context()
         
         # Exclude non-attributed rows
         self.df_ot = exclude_employee_names(self.df_ot, "employee_name")
@@ -71,10 +78,10 @@ class OrderTakersTab:
         unique_ots = self.df_ot['employee_id'].nunique()
         avg_sale_per_ot = total_ot_sales / unique_ots if unique_ots > 0 else 0
         
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total OT Sales", format_currency(total_ot_sales))
-        col2.metric("Active OTs", f"{unique_ots:,}")
-        col3.metric("Avg per OT", format_currency(avg_sale_per_ot))
+        cols = responsive_columns(self.responsive, desktop=3, tablet=2, phone=1)
+        cols[0].metric("Total OT Sales", format_currency(total_ot_sales))
+        cols[1 % len(cols)].metric("Active OTs", f"{unique_ots:,}")
+        cols[2 % len(cols)].metric("Avg per OT", format_currency(avg_sale_per_ot))
 
     def _render_cashier_sales(self):
         """Render cashier and counter cashier sales from Candelahns OT data."""
@@ -87,9 +94,9 @@ class OrderTakersTab:
 
         total_cashier_sales = df_cashier['total_sale'].sum()
         unique_cashiers = df_cashier['employee_id'].nunique()
-        col1, col2 = st.columns(2)
-        col1.metric("Total Cashier Sales", format_currency(total_cashier_sales))
-        col2.metric("Cashiers", f"{unique_cashiers:,}")
+        cols = responsive_columns(self.responsive, desktop=2, tablet=2, phone=1)
+        cols[0].metric("Total Cashier Sales", format_currency(total_cashier_sales))
+        cols[1 % len(cols)].metric("Cashiers", f"{unique_cashiers:,}")
 
         df_cashier_sorted = df_cashier.sort_values('total_sale', ascending=False)
         display_cashier = df_cashier_sorted.copy()
@@ -125,14 +132,12 @@ class OrderTakersTab:
             insidetextanchor='middle'
         )
         
-        fig.update_layout(
-            showlegend=False, 
-            height=500,
-            xaxis_title="Sales (PKR)",
-            yaxis_title="Order Taker"
-        )
+        fig.update_layout(showlegend=False, xaxis_title="Sales (PKR)", yaxis_title="Order Taker")
         
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(
+            apply_plotly_responsive_layout(fig, self.responsive, desktop_height=500, tablet_height=420, phone_height=320),
+            width="stretch",
+        )
 
     def _render_detailed_table(self):
         """Render detailed table with search functionality"""
@@ -159,6 +164,11 @@ class OrderTakersTab:
             "width": width,
             "hide_index": hide_index
         }
-        if height is not None:
-            kwargs["height"] = height
+        kwargs["height"] = clamp_dataframe_height(
+            self.responsive,
+            desktop=height,
+            tablet=max(220, int((height or 420) * 0.82)),
+            phone=max(200, int((height or 420) * 0.68)),
+            kind="default" if height is None else "compact",
+        )
         st.dataframe(data, **kwargs)

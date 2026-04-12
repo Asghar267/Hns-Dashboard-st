@@ -36,6 +36,12 @@ from modules.visualization import (
     create_forecast_with_ci,
     create_product_time_series,
 )
+from modules.responsive import (
+    apply_plotly_responsive_layout,
+    clamp_dataframe_height,
+    get_responsive_context,
+    responsive_columns,
+)
 
 
 def month_name(year: int, month: int) -> str:
@@ -54,7 +60,19 @@ def render_table(
     if df is None or df.empty:
         st.info("No data to display.")
         return
-    st.dataframe(df, width=width, height=height, hide_index=hide_index)
+    ctx = get_responsive_context()
+    st.dataframe(
+        df,
+        width=width,
+        height=clamp_dataframe_height(
+            ctx,
+            desktop=height,
+            tablet=max(220, int((height or 420) * 0.82)),
+            phone=max(200, int((height or 420) * 0.68)),
+            kind="default" if height is None else "compact",
+        ),
+        hide_index=hide_index,
+    )
 
 
 class TrendsAnalyticsTab:
@@ -85,6 +103,7 @@ class TrendsAnalyticsTab:
             14: "FESTIVAL 2",
         }
         self.df_line_item = df_line_item if df_line_item is not None else pd.DataFrame()
+        self.responsive = get_responsive_context()
 
     def render(self) -> None:
         st.header("Trends & Analytics")
@@ -105,7 +124,7 @@ class TrendsAnalyticsTab:
                 color="total_Nt_amount",
                 color_continuous_scale="Blues",
             )
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(apply_plotly_responsive_layout(fig, self.responsive, desktop_height=400, tablet_height=340, phone_height=300), width="stretch")
 
             try:
                 forecast_method = st.selectbox(
@@ -116,15 +135,15 @@ class TrendsAnalyticsTab:
                 )
                 forecast_horizon = st.slider("Forecast horizon (days)", 1, 30, 7)
 
-                col_a, col_b = st.columns([2, 1])
-                with col_a:
+                trend_cols = responsive_columns(self.responsive, desktop=2, tablet=1, phone=1)
+                with trend_cols[0]:
                     trend_fig = create_monthly_sales_trend(df_monthly, periods=24, rolling=3)
-                    st.plotly_chart(trend_fig, width="stretch")
-                with col_b:
+                    st.plotly_chart(apply_plotly_responsive_layout(trend_fig, self.responsive, desktop_height=420, tablet_height=360, phone_height=320), width="stretch")
+                with trend_cols[1 % len(trend_cols)]:
                     forecast_fig = create_forecast_with_ci(
                         df_daily, periods_ahead=forecast_horizon, method=forecast_method
                     )
-                    st.plotly_chart(forecast_fig, width="stretch")
+                    st.plotly_chart(apply_plotly_responsive_layout(forecast_fig, self.responsive, desktop_height=420, tablet_height=360, phone_height=320), width="stretch")
             except Exception as e:
                 st.warning(f"Could not load trend/forecast data: {e}")
         else:
@@ -208,8 +227,8 @@ class TrendsAnalyticsTab:
                 color_continuous_scale="Viridis",
             )
             fig_cat.update_traces(texttemplate=" %{x:,.0f}", textposition="inside")
-            fig_cat.update_layout(height=350, showlegend=False)
-            st.plotly_chart(fig_cat, width="stretch")
+            fig_cat.update_layout(showlegend=False)
+            st.plotly_chart(apply_plotly_responsive_layout(fig_cat, self.responsive, desktop_height=350, tablet_height=320, phone_height=280), width="stretch")
         else:
             st.info("No current month category data available for Top Line Item Names")
 
@@ -248,8 +267,11 @@ class TrendsAnalyticsTab:
                 color_continuous_scale="Greens",
             )
             fig_top.update_traces(texttemplate=" %{x:,.0f}", textposition="inside")
-            fig_top.update_layout(height=400, showlegend=False)
-            st.plotly_chart(fig_top, width="stretch")
+            fig_top.update_layout(showlegend=False)
+            st.plotly_chart(
+                apply_plotly_responsive_layout(fig_top, self.responsive, desktop_height=400, tablet_height=340, phone_height=300),
+                width="stretch",
+            )
 
             try:
                 allowed_line_items = [
@@ -334,9 +356,12 @@ class TrendsAnalyticsTab:
                                 title="Top 10 Products - Daily Sales",
                                 labels={"total_Nt_amount": "Sales (PKR)", prod_col: "Product"},
                             )
-                            fig_top_trend.update_layout(height=420, hovermode="x unified")
+                            fig_top_trend.update_layout(hovermode="x unified")
                             fig_top_trend.update_yaxes(tickformat=",.0f")
-                            st.plotly_chart(fig_top_trend, width="stretch")
+                            st.plotly_chart(
+                                apply_plotly_responsive_layout(fig_top_trend, self.responsive, desktop_height=420, tablet_height=360, phone_height=320),
+                                width="stretch",
+                            )
                         else:
                             st.info("Info: Daily trend data missing date column for top products.")
                 else:
@@ -378,9 +403,12 @@ class TrendsAnalyticsTab:
                                 title="Bottom 10 Products - Daily Sales",
                                 labels={"total_Nt_amount": "Sales (PKR)", prod_col: "Product"},
                             )
-                            fig_bottom_trend.update_layout(height=420, hovermode="x unified")
+                            fig_bottom_trend.update_layout(hovermode="x unified")
                             fig_bottom_trend.update_yaxes(tickformat=",.0f")
-                            st.plotly_chart(fig_bottom_trend, width="stretch")
+                            st.plotly_chart(
+                                apply_plotly_responsive_layout(fig_bottom_trend, self.responsive, desktop_height=420, tablet_height=360, phone_height=320),
+                                width="stretch",
+                            )
                         else:
                             st.info("Info: Daily trend data missing date column for bottom products.")
                 else:
@@ -403,7 +431,10 @@ class TrendsAnalyticsTab:
                         self.start_date, self.end_date, self.selected_branches, self.data_mode, [selected_prod]
                     )
                     prod_fig = create_product_time_series(df_sel, selected_prod, agg="daily", show_qty=True, rolling=7)
-                    st.plotly_chart(prod_fig, width="stretch")
+                    st.plotly_chart(
+                        apply_plotly_responsive_layout(prod_fig, self.responsive, desktop_height=420, tablet_height=360, phone_height=320),
+                        width="stretch",
+                    )
                 except Exception as e:
                     st.warning(f"Could not load detailed series for {selected_prod}: {e}")
             else:
@@ -417,8 +448,8 @@ class TrendsAnalyticsTab:
                 df_bottom_products = df_products_curr[["Product", "Current_Sales", "Current_Qty"]].copy()
                 df_bottom_products = df_bottom_products.sort_values("Current_Sales", ascending=True).head(low_n)
                 if not df_bottom_products.empty:
-                    col_lp1, col_lp2 = st.columns([1, 2])
-                    with col_lp1:
+                    low_cols = responsive_columns(self.responsive, desktop=2, tablet=1, phone=1)
+                    with low_cols[0]:
                         st.write("Bottom products by sales")
                         render_table(
                             df_bottom_products.assign(
@@ -427,7 +458,7 @@ class TrendsAnalyticsTab:
                             width="stretch",
                             height=200,
                         )
-                    with col_lp2:
+                    with low_cols[1 % len(low_cols)]:
                         fig_low = px.bar(
                             df_bottom_products,
                             x="Current_Sales",
@@ -437,8 +468,11 @@ class TrendsAnalyticsTab:
                             color="Current_Sales",
                             color_continuous_scale="Reds",
                         )
-                        fig_low.update_layout(height=300, showlegend=False)
-                        st.plotly_chart(fig_low, width="stretch")
+                        fig_low.update_layout(showlegend=False)
+                        st.plotly_chart(
+                            apply_plotly_responsive_layout(fig_low, self.responsive, desktop_height=300, tablet_height=280, phone_height=260),
+                            width="stretch",
+                        )
             except Exception:
                 pass
 
@@ -469,21 +503,25 @@ class TrendsAnalyticsTab:
 
         selected_category = st.selectbox("Select Category (Line Item)", options=["All"] + categories, index=0)
 
-        branch_option_comp = st.radio(
-            "Branch Filter",
-            options=[
-                "All",
-                self.branch_name_map.get(2, "Khadda Main Branch"),
-                self.branch_name_map.get(3, "FESTIVAL"),
-                self.branch_name_map.get(4, "Rahat Commercial"),
-                self.branch_name_map.get(6, "TOWER"),
-                self.branch_name_map.get(8, "North Nazimabad"),
-                self.branch_name_map.get(10, "MALIR"),
-                self.branch_name_map.get(14, "FESTIVAL 2"),
-            ],
-            index=0,
-            horizontal=True,
-        )
+        branch_filter_options = [
+            "All",
+            self.branch_name_map.get(2, "Khadda Main Branch"),
+            self.branch_name_map.get(3, "FESTIVAL"),
+            self.branch_name_map.get(4, "Rahat Commercial"),
+            self.branch_name_map.get(6, "TOWER"),
+            self.branch_name_map.get(8, "North Nazimabad"),
+            self.branch_name_map.get(10, "MALIR"),
+            self.branch_name_map.get(14, "FESTIVAL 2"),
+        ]
+        if self.responsive.is_phone:
+            branch_option_comp = st.selectbox("Branch Filter", options=branch_filter_options, index=0)
+        else:
+            branch_option_comp = st.radio(
+                "Branch Filter",
+                options=branch_filter_options,
+                index=0,
+                horizontal=True,
+            )
         if branch_option_comp == "All":
             branch_ids_query = self.selected_branches
         else:

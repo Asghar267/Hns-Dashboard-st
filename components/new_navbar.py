@@ -1,6 +1,8 @@
 import streamlit as st
 from typing import Dict
 
+from modules.responsive import get_responsive_context
+
 class NewNavbarComponent:
     def __init__(self, config: Dict):
         self.config = config
@@ -8,6 +10,7 @@ class NewNavbarComponent:
             st.session_state.active_tab = 'overview'
 
     def render(self, user_record: Dict = None) -> str:
+        responsive = get_responsive_context()
         tabs_config = self.config.get('tabs', {})
         if user_record and str(user_record.get('role', 'user')).lower() == 'admin':
             user_allowed_tabs = 'all'
@@ -57,14 +60,22 @@ class NewNavbarComponent:
         if st.session_state.active_tab in keys:
             default_index = keys.index(st.session_state.active_tab)
 
-        selected = st.radio(
-            "Navigation",
-            labels,
-            index=default_index,
-            horizontal=True,
-            label_visibility="collapsed",
-            key="hns_nav_radio",
-        )
+        if responsive.is_phone:
+            selected = st.selectbox(
+                "Navigation",
+                labels,
+                index=default_index,
+                key="hns_nav_select",
+            )
+        else:
+            selected = st.radio(
+                "Navigation",
+                labels,
+                index=default_index,
+                horizontal=not responsive.is_tablet,
+                label_visibility="collapsed",
+                key="hns_nav_radio",
+            )
 
         for t in display_tabs:
             if t["label"] == selected:

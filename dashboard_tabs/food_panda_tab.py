@@ -14,6 +14,12 @@ import streamlit as st
 from modules.connection_cloud import DatabaseConfig
 from modules.database import pool, placeholders, build_filter_clause
 from modules.utils import format_currency, export_to_excel
+from modules.responsive import (
+    clamp_dataframe_height,
+    get_responsive_context,
+    pick_columns_for_tier,
+    responsive_columns,
+)
 from modules.foodpanda_reconciliation import (
     load_foodpanda_order_summary,
     load_tower_order_details,
@@ -104,6 +110,58 @@ def _to_bool(series: pd.Series) -> pd.Series:
     return s.isin(["y", "yes", "true", "1"])
 
 
+def _fp_ctx():
+    return get_responsive_context()
+
+
+def _fp_columns(desktop: int, tablet: int | None = None, phone: int = 1, gap: str = "small"):
+    return responsive_columns(_fp_ctx(), desktop=desktop, tablet=tablet, phone=phone, gap=gap)
+
+
+def _fp_df(
+    data,
+    *,
+    height: int | None = None,
+    kind: str = "default",
+    hide_index: bool = True,
+    phone_columns: list[str] | None = None,
+    tablet_columns: list[str] | None = None,
+    desktop_columns: list[str] | None = None,
+    column_config=None,
+) -> None:
+    df_to_show = data
+    if isinstance(data, pd.DataFrame):
+        cols = pick_columns_for_tier(
+            _fp_ctx(),
+            list(data.columns),
+            desktop=desktop_columns,
+            tablet=tablet_columns,
+            phone=phone_columns,
+        )
+        df_to_show = data[cols].copy()
+    kwargs = {
+        "width": "stretch",
+        "hide_index": hide_index,
+        "height": clamp_dataframe_height(
+            _fp_ctx(),
+            desktop=height,
+            tablet=max(220, int((height or 420) * 0.82)),
+            phone=max(200, int((height or 420) * 0.68)),
+            kind=kind,
+        ),
+    }
+    if column_config is not None:
+        kwargs["column_config"] = column_config
+    st.dataframe(df_to_show, **kwargs)
+
+
+def _fp_choose_nav(label: str, options: list[str], key: str) -> str:
+    ctx = _fp_ctx()
+    if ctx.is_phone:
+        return st.selectbox(label, options=options, key=key)
+    return st.radio(label, options, horizontal=True, label_visibility="collapsed", key=key)
+
+
 def _render_foodpanda_reconciliation_tab(
     start_date: str,
     end_date: str,
@@ -185,11 +243,12 @@ def _render_foodpanda_reconciliation_tab(
     except Exception:
         gst_col_config = None
 
-    st.dataframe(
+    _fp_df(
         calc_view,
-        width="stretch",
-        hide_index=True,
         height=320,
+        kind="compact",
+        phone_columns=["Order Code", "Calculated Order Amount", "Net Sales", "GST %"],
+        tablet_columns=["Order Code", "Food GST", "Calculated Order Amount", "Net Sales", "GST %"],
         column_config=gst_col_config,
     )
 
@@ -223,32 +282,32 @@ def _render_foodpanda_reconciliation_tab(
     excel_duplicates = _drop_hidden_cols(result.excel_duplicates.copy())
 
     metrics = {r["metric"]: r["value"] for r in result.summary.to_dict("records")}
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Total Rows", f"{int(metrics.get('total_rows', 0)):,}")
-    c2.metric("Matched OK", f"{int(metrics.get('matched_ok', 0)):,}")
-    c3.metric("Duplicates Resolved", f"{int(metrics.get('duplicate_resolved', 0)):,}")
-    c4.metric("Price Mismatch", f"{int(metrics.get('matched_price_mismatch', 0)):,}")
-    c5.metric("Unmatched", f"{int(metrics.get('unmatched', 0)):,}")
+    metric_cols = _fp_columns(5, tablet=2, phone=1)
+    metric_cols[0].metric("Total Rows", f"{int(metrics.get('total_rows', 0)):,}")
+    metric_cols[1 % len(metric_cols)].metric("Matched OK", f"{int(metrics.get('matched_ok', 0)):,}")
+    metric_cols[2 % len(metric_cols)].metric("Duplicates Resolved", f"{int(metrics.get('duplicate_resolved', 0)):,}")
+    metric_cols[3 % len(metric_cols)].metric("Price Mismatch", f"{int(metrics.get('matched_price_mismatch', 0)):,}")
+    metric_cols[4 % len(metric_cols)].metric("Unmatched", f"{int(metrics.get('unmatched', 0)):,}")
 
     st.markdown("---")
     st.subheader("Matched Only")
     matched_only = full[full["match_status"].isin(["matched_ok", "duplicate_resolved"])].copy()
-    st.dataframe(matched_only, width="stretch", hide_index=True, height=320)
+    _fp_df(matched_only, height=320, kind="compact", phone_columns=["Order Code", "shop_name", "match_status", "excel_order_amount", "NT_amount"])
 
     st.subheader("Mismatches")
-    st.dataframe(mismatches, width="stretch", hide_index=True, height=260)
+    _fp_df(mismatches, height=260, kind="compact", phone_columns=["Order Code", "shop_name", "match_status", "excel_order_amount", "NT_amount"])
 
     st.subheader("Unmatched")
-    st.dataframe(unmatched, width="stretch", hide_index=True, height=260)
+    _fp_df(unmatched, height=260, kind="compact", phone_columns=["Order Code", "Outlet Name", "match_status", "excel_order_amount"])
 
     st.subheader("Excel Duplicates (Audit)")
-    st.dataframe(excel_duplicates, width="stretch", hide_index=True, height=260)
+    _fp_df(excel_duplicates, height=260, kind="compact", phone_columns=["Order Code", "Outlet Name", "excel_order_amount"])
 
     st.subheader("Duplicates (Audit)")
-    st.dataframe(duplicates, width="stretch", hide_index=True, height=260)
+    _fp_df(duplicates, height=260, kind="compact", phone_columns=["Order Code", "shop_name", "NT_amount", "match_status"])
 
     st.subheader("Full Reconciliation")
-    st.dataframe(full, width="stretch", hide_index=True, height=420)
+    _fp_df(full, height=420, kind="default", phone_columns=["Order Code", "shop_name", "match_status", "excel_order_amount", "NT_amount", "difference"])
 
     st.markdown("---")
     st.subheader("Database Summary (date range)")
@@ -282,19 +341,19 @@ def _render_foodpanda_reconciliation_tab(
         db_in_excel = int(db_codes.isin(excel_codes).sum())
         db_not_in_excel = int((db_codes.ne("") & ~db_codes.isin(excel_codes)).sum())
 
-        d1, d2, d3, d4, d5 = st.columns(5)
-        d1.metric("DB Transactions", f"{len(df_db_range):,}")
-        d2.metric("DB Sales", f"{float(pd.to_numeric(df_db_range.get('NT_amount'), errors='coerce').fillna(0.0).sum()):,.0f}")
-        d3.metric("DB Codes in Excel", f"{db_in_excel:,}")
-        d4.metric("DB Codes not in Excel", f"{db_not_in_excel:,}")
-        d5.metric("DB Blank Codes", f"{db_code_blank:,}")
+        db_metric_cols = _fp_columns(5, tablet=2, phone=1)
+        db_metric_cols[0].metric("DB Transactions", f"{len(df_db_range):,}")
+        db_metric_cols[1 % len(db_metric_cols)].metric("DB Sales", f"{float(pd.to_numeric(df_db_range.get('NT_amount'), errors='coerce').fillna(0.0).sum()):,.0f}")
+        db_metric_cols[2 % len(db_metric_cols)].metric("DB Codes in Excel", f"{db_in_excel:,}")
+        db_metric_cols[3 % len(db_metric_cols)].metric("DB Codes not in Excel", f"{db_not_in_excel:,}")
+        db_metric_cols[4 % len(db_metric_cols)].metric("DB Blank Codes", f"{db_code_blank:,}")
 
         show_db_sample = st.checkbox("Show DB-only sample", value=False, key="foodpanda_db_only_sample")
         if show_db_sample:
             sample = df_db_range[db_codes.ne("") & ~db_codes.isin(excel_codes)].copy()
             sample = sample.sort_values(["sale_date", "sale_id"], ascending=[False, False]).head(50)
             view_cols = [c for c in ["sale_date", "shop_name", "NT_amount", "db_order_code_raw", "db_order_code_norm", "sale_id"] if c in sample.columns]
-            st.dataframe(sample[view_cols] if view_cols else sample, width="stretch", hide_index=True, height=260)
+            _fp_df(sample[view_cols] if view_cols else sample, height=260, kind="compact")
 
         with st.expander("Database Food Panda Transactions (date range)", expanded=False):
             st.caption("Full DB listing for the selected date range/branches. Use filters below to narrow down.")
@@ -347,7 +406,7 @@ def _render_foodpanda_reconciliation_tab(
             if "NT_amount" in db_show.columns:
                 db_show["NT_amount"] = pd.to_numeric(db_show["NT_amount"], errors="coerce").fillna(0.0)
 
-            st.dataframe(db_show.head(int(max_rows)), width="stretch", hide_index=True, height=420)
+            _fp_df(db_show.head(int(max_rows)), height=420, kind="default")
 
             try:
                 st.download_button(
@@ -435,10 +494,10 @@ def _render_foodpanda_cancellation_tab() -> None:
     tower_non_cancelled = tower_df[~tower_cancelled_mask].copy()
 
     st.markdown("**All Orders (Order Details workbook)**")
-    t1, t2, t3 = st.columns(3)
-    t1.metric("Orders", f"{len(tower_df):,}")
-    t2.metric("Cancelled", f"{len(tower_cancelled):,}")
-    t3.metric("Non Cancelled", f"{len(tower_non_cancelled):,}")
+    tower_cols = _fp_columns(3, tablet=2, phone=1)
+    tower_cols[0].metric("Orders", f"{len(tower_df):,}")
+    tower_cols[1 % len(tower_cols)].metric("Cancelled", f"{len(tower_cancelled):,}")
+    tower_cols[2 % len(tower_cols)].metric("Non Cancelled", f"{len(tower_non_cancelled):,}")
 
     tower_reason_counts = (
         tower_cancelled.assign(_reason=tower_reason[tower_cancelled_mask].values)
@@ -447,7 +506,7 @@ def _render_foodpanda_cancellation_tab() -> None:
         .rename(columns={"_reason": "Cancellation reason", "size": "count"})
         .sort_values("count", ascending=False)
     )
-    st.dataframe(tower_reason_counts, width="stretch", hide_index=True, height=260)
+    _fp_df(tower_reason_counts, height=260, kind="compact")
 
     tower_complaints = _norm_reason(tower_df.get("Complaint Reason", pd.Series(dtype=object)))
     tower_complaints_df = pd.DataFrame({"Complaint Reason": tower_complaints})
@@ -462,7 +521,7 @@ def _render_foodpanda_cancellation_tab() -> None:
             .rename(columns={"size": "count"})
             .sort_values("count", ascending=False)
         )
-        st.dataframe(tower_complaint_counts, width="stretch", hide_index=True, height=240)
+        _fp_df(tower_complaint_counts, height=240, kind="compact")
 
     tower_in_summary = pd.DataFrame()
     if df_sum is not None and not df_sum.empty and "excel_order_code_norm" in df_sum.columns:
@@ -472,10 +531,10 @@ def _render_foodpanda_cancellation_tab() -> None:
         st.markdown("**Subset (present in Order Summary)**")
         reason2 = _norm_reason(tower_in_summary.get("Cancellation reason", pd.Series(dtype=object)))
         s_mask = reason2.ne("")
-        s1, s2, s3 = st.columns(3)
-        s1.metric("Subset Orders", f"{len(tower_in_summary):,}")
-        s2.metric("Subset Cancelled", f"{int(s_mask.sum()):,}")
-        s3.metric("Subset Non Cancelled", f"{int((~s_mask).sum()):,}")
+        subset_cols = _fp_columns(3, tablet=2, phone=1)
+        subset_cols[0].metric("Subset Orders", f"{len(tower_in_summary):,}")
+        subset_cols[1 % len(subset_cols)].metric("Subset Cancelled", f"{int(s_mask.sum()):,}")
+        subset_cols[2 % len(subset_cols)].metric("Subset Non Cancelled", f"{int((~s_mask).sum()):,}")
 
     with st.expander("Diagnostics", expanded=False):
         base = tower_df.copy()
@@ -505,7 +564,7 @@ def _render_foodpanda_cancellation_tab() -> None:
                 key="tower_diag_min_orders_cancel",
             )
             st.markdown("**Highest cancellation rate (filtered)**")
-            st.dataframe(by_store[by_store["orders"].ge(min_orders)].head(30), width="stretch", hide_index=True, height=260)
+            _fp_df(by_store[by_store["orders"].ge(min_orders)].head(30), height=260, kind="compact")
         else:
             by_store = pd.DataFrame()
             st.info("Restaurant/store columns not found in the Order Details sheet; skipping store-level diagnostics.")
@@ -524,7 +583,7 @@ def _render_foodpanda_cancellation_tab() -> None:
             if not by_day.empty:
                 by_day["cancel_rate"] = (by_day["cancelled"] / by_day["orders"]).round(4)
                 st.markdown("**Day-wise cancellation trend**")
-                st.dataframe(by_day, width="stretch", hide_index=True, height=260)
+                _fp_df(by_day, height=260, kind="compact")
         else:
             by_day = pd.DataFrame()
 
@@ -542,7 +601,7 @@ def _render_foodpanda_cancellation_tab() -> None:
             )
             agg["cancel_rate"] = (agg["cancelled"] / agg["orders"]).round(4)
             st.markdown(f"**By {c}**")
-            st.dataframe(agg.head(40), width="stretch", hide_index=True, height=240)
+            _fp_df(agg.head(40), height=240, kind="compact")
 
     with st.expander("Cancelled order details", expanded=False):
         if tower_cancelled.empty:
@@ -560,13 +619,13 @@ def _render_foodpanda_cancellation_tab() -> None:
                 tower_cancelled_details = tower_cancelled_details[
                     _norm_reason(tower_cancelled_details["Cancellation reason"]).eq(selected_tower_reason)
                 ].copy()
-            st.dataframe(_select_cancel_view_cols(tower_cancelled_details), width="stretch", hide_index=True, height=380)
+            _fp_df(_select_cancel_view_cols(tower_cancelled_details), height=380, kind="default")
 
     joined = pd.DataFrame()
     if df_sum is not None and not df_sum.empty:
         joined = _attach_tower_cancellation_reasons(df_sum.copy(), tower_df)
         st.markdown("**Order Summary joined with Order Details (Excel-only)**")
-        st.dataframe(_select_cancel_view_cols(joined), width="stretch", hide_index=True, height=320)
+        _fp_df(_select_cancel_view_cols(joined), height=320, kind="compact")
 
     from modules.utils import export_tables_to_excel
     cancel_tables = {
@@ -664,10 +723,10 @@ class FoodPandaTab:
         total_tx = int(len(df)) if not df.empty else 0
         aov = (total_sales / total_tx) if total_tx else 0.0
 
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Total Sales", format_currency(total_sales))
-        m2.metric("Transactions", f"{total_tx:,}")
-        m3.metric("Avg Order Value", format_currency(aov))
+        metric_cols = _fp_columns(3, tablet=2, phone=1)
+        metric_cols[0].metric("Total Sales", format_currency(total_sales))
+        metric_cols[1 % len(metric_cols)].metric("Transactions", f"{total_tx:,}")
+        metric_cols[2 % len(metric_cols)].metric("Avg Order Value", format_currency(aov))
 
         st.markdown("---")
         if df.empty:
@@ -675,8 +734,8 @@ class FoodPandaTab:
             return
 
         # Summaries
-        left, right = st.columns(2)
-        with left:
+        summary_cols = _fp_columns(2, tablet=2, phone=1)
+        with summary_cols[0]:
             st.subheader("By Branch")
             by_branch = (
                 df.groupby(["shop_id", "shop_name"], as_index=False)
@@ -684,9 +743,9 @@ class FoodPandaTab:
                 .sort_values("sales", ascending=False)
             )
             by_branch["sales"] = by_branch["sales"].apply(format_currency)
-            st.dataframe(by_branch, width="stretch", hide_index=True, height=280)
+            _fp_df(by_branch, height=280, kind="compact", phone_columns=["shop_name", "transactions", "sales"])
 
-        with right:
+        with summary_cols[1 % len(summary_cols)]:
             st.subheader("Top Employees")
             by_emp = (
                 df.groupby(["employee_id", "employee_code", "employee_name"], as_index=False)
@@ -694,7 +753,7 @@ class FoodPandaTab:
                 .sort_values("sales", ascending=False)
             )
             by_emp["sales"] = by_emp["sales"].apply(format_currency)
-            st.dataframe(by_emp.head(50), width="stretch", hide_index=True, height=280)
+            _fp_df(by_emp.head(50), height=280, kind="compact", phone_columns=["employee_name", "transactions", "sales"])
 
         st.markdown("---")
         st.subheader("All Food Panda Transactions")
@@ -735,7 +794,13 @@ class FoodPandaTab:
         if "net_amount" in out_show.columns:
             out_show["net_amount"] = pd.to_numeric(out_show["net_amount"], errors="coerce").fillna(0.0)
 
-        st.dataframe(out_show, width="stretch", hide_index=True, height=520)
+        _fp_df(
+            out_show,
+            height=520,
+            kind="tall",
+            phone_columns=["order_id", "order_code", "sale_date", "shop_name", "net_amount"],
+            tablet_columns=["order_id", "order_code", "sale_date", "shop_name", "employee_name", "net_amount"],
+        )
 
         df_export = _drop_hidden_cols(df.copy())
         st.download_button(
@@ -749,13 +814,7 @@ class FoodPandaTab:
         # Streamlit `st.tabs()` can jump back to the first tab on reruns triggered by
         # file uploads (observed in some Streamlit versions). Use a stateful selector
         # so uploading inside "Cancellation" keeps the user on that sub-tab.
-        subtab = st.radio(
-            "Foodpanda Subtab",
-            ["Reconciliation", "Cancellation"],
-            horizontal=True,
-            label_visibility="collapsed",
-            key="foodpanda_subtab",
-        )
+        subtab = _fp_choose_nav("Foodpanda Subtab", ["Reconciliation", "Cancellation"], key="foodpanda_subtab")
 
         if subtab == "Reconciliation":
             _render_foodpanda_reconciliation_tab(

@@ -75,6 +75,13 @@ from modules.utils import (
 from modules.database import get_saved_category_filters
 from config import app_config
 from components.new_navbar import NewNavbarComponent
+from modules.responsive import (
+    clamp_dataframe_height,
+    get_responsive_context,
+    infer_initial_sidebar_state,
+    render_layout_mode_control,
+    responsive_columns,
+)
 
 
 EXCLUDED_EMPLOYEE_NAMES = {"online/unassigned"}
@@ -115,6 +122,10 @@ def load_custom_css() -> None:
     st.markdown(
         f"""
         <style>
+        :root {{
+            --hns-phone-breakpoint: 768px;
+            --hns-tablet-breakpoint: 1024px;
+        }}
         .metric-card {{
             background-color: {card_bg};
             padding: 20px;
@@ -151,9 +162,21 @@ def load_custom_css() -> None:
             color: #6c757d;
             font-style: italic;
         }}
+        .mobile-controls-card {{
+            background: {card_bg};
+            border: 1px solid {border_color};
+            border-radius: 12px;
+            padding: 0.85rem 1rem;
+            margin-bottom: 0.75rem;
+        }}
+        .mobile-controls-card p {{
+            margin: 0;
+            color: {text_color};
+        }}
         /* Reduce top whitespace above main heading */
         .block-container {{
             padding-top: 1rem !important;
+            padding-bottom: 1.25rem !important;
         }}
         h1, h2, h3 {{
             margin-top: 0.2rem !important;
@@ -266,6 +289,42 @@ def load_custom_css() -> None:
             max-width: 98vw !important;
             margin: 0 auto !important;
         }}
+        @media (max-width: 1024px) {{
+            .metric-card {{
+                padding: 16px;
+            }}
+            .metric-value {{
+                font-size: 1.65rem;
+            }}
+        }}
+        @media (max-width: 768px) {{
+            .block-container {{
+                padding-top: 0.75rem !important;
+                padding-left: 0.9rem !important;
+                padding-right: 0.9rem !important;
+            }}
+            .metric-card {{
+                padding: 14px;
+                margin: 8px 0;
+            }}
+            .metric-value {{
+                font-size: 1.35rem;
+            }}
+            .metric-label {{
+                font-size: 0.8rem;
+            }}
+            div[data-testid="stHorizontalBlock"] {{
+                gap: 0.5rem !important;
+            }}
+            div[role="dialog"]:has([data-testid="stDataFrame"]),
+            div[data-testid="stDialog"]:has([data-testid="stDataFrame"]),
+            div[data-testid="stModal"]:has([data-testid="stDataFrame"]),
+            div[aria-modal="true"]:has([data-testid="stDataFrame"]) {{
+                inset: 0.5rem !important;
+                width: calc(100vw - 1rem) !important;
+                height: calc(100vh - 1rem) !important;
+            }}
+        }}
         </style>
 
     """, unsafe_allow_html=True)
@@ -309,6 +368,7 @@ def save_snapshot_settings(settings: Dict[str, Any]) -> None:
 
 
 def render_user_management_tab(branch_name_map: dict) -> None:
+    responsive = get_responsive_context()
     st.header("Admin & Snapshots")
     st.caption("Manage users, access controls, and snapshot generation/viewing.")
 
@@ -324,7 +384,7 @@ def render_user_management_tab(branch_name_map: dict) -> None:
                 for col in ["allowed_branches", "allowed_tabs", "allowed_tables"]:
                     if col in df_users.columns:
                         df_users[col] = df_users[col].apply(lambda v: str(v))
-                st.dataframe(df_users, width="stretch", hide_index=True, height=260)
+                st.dataframe(df_users, width="stretch", hide_index=True, height=clamp_dataframe_height(responsive, desktop=260, tablet=240, phone=220, kind="compact"))
             else:
                 st.info("No users found yet.")
 
@@ -343,7 +403,9 @@ def render_user_management_tab(branch_name_map: dict) -> None:
         if "user_mgmt_selected" not in st.session_state:
             st.session_state.user_mgmt_selected = "<new>"
 
-        sel_col, form_col = st.columns([0.45, 0.55], gap="large")
+        admin_cols = responsive_columns(responsive, desktop=2, tablet=2, phone=1, gap="large")
+        sel_col = admin_cols[0]
+        form_col = admin_cols[1 % len(admin_cols)]
         with sel_col:
             st.subheader("Select User")
             with st.form("user_select_form"):
@@ -441,7 +503,9 @@ def render_user_management_tab(branch_name_map: dict) -> None:
         st.subheader("Snapshots")
         st.caption("Saved settings are used by the sidebar **Generate Snapshots** button.")
 
-        left, right = st.columns([0.42, 0.58], gap="large")
+        snap_cols = responsive_columns(responsive, desktop=2, tablet=2, phone=1, gap="large")
+        left = snap_cols[0]
+        right = snap_cols[1 % len(snap_cols)]
 
         with left:
             st.markdown("**Generation Settings**")
@@ -458,7 +522,7 @@ def render_user_management_tab(branch_name_map: dict) -> None:
                 ("khadda_diagnostics", "Khadda diagnostics"),
             ]
 
-            btn1, btn2 = st.columns(2)
+            btn1, btn2 = responsive_columns(responsive, desktop=2, tablet=2, phone=1)
             with btn1:
                 if st.button("Enable All", width="stretch", key="snap_enable_all"):
                     current = {k: True for k in SNAPSHOT_SETTINGS_DEFAULTS.keys()}
@@ -509,14 +573,14 @@ def render_user_management_tab(branch_name_map: dict) -> None:
                     params = {}
 
             if params:
-                m1, m2, m3, m4 = st.columns(4)
-                with m1:
+                metric_cols = responsive_columns(responsive, desktop=4, tablet=2, phone=1)
+                with metric_cols[0]:
                     st.metric("Start", str(params.get("start_date", "")) or "-")
-                with m2:
+                with metric_cols[1 % len(metric_cols)]:
                     st.metric("End", str(params.get("end_date", "")) or "-")
-                with m3:
+                with metric_cols[2 % len(metric_cols)]:
                     st.metric("Mode", str(params.get("data_mode", "")) or "-")
-                with m4:
+                with metric_cols[3 % len(metric_cols)]:
                     st.metric("Branches", str(len(params.get("branches", []) or [])))
                 ga = str(params.get("generated_at", "") or "").strip()
                 if ga:
@@ -533,12 +597,12 @@ def render_user_management_tab(branch_name_map: dict) -> None:
                 images_count = sum(1 for p in all_files if p.suffix.lower() == ".png")
                 csv_count = sum(1 for p in all_files if p.suffix.lower() == ".csv")
                 json_count = sum(1 for p in all_files if p.suffix.lower() == ".json")
-                c1, c2, c3 = st.columns(3)
-                with c1:
+                file_metric_cols = responsive_columns(responsive, desktop=3, tablet=2, phone=1)
+                with file_metric_cols[0]:
                     st.metric("PNGs", str(images_count))
-                with c2:
+                with file_metric_cols[1 % len(file_metric_cols)]:
                     st.metric("CSVs", str(csv_count))
-                with c3:
+                with file_metric_cols[2 % len(file_metric_cols)]:
                     st.metric("JSON", str(json_count))
             except Exception:
                 pass
@@ -562,7 +626,7 @@ def render_user_management_tab(branch_name_map: dict) -> None:
             elif chosen.suffix.lower() == ".csv":
                 try:
                     df = pd.read_csv(chosen)
-                    st.dataframe(df, width="stretch", hide_index=True, height=520)
+                    st.dataframe(df, width="stretch", hide_index=True, height=clamp_dataframe_height(responsive, desktop=520, tablet=400, phone=300, kind="tall"))
                 except Exception as e:
                     st.error(f"Could not read CSV: {e}")
                 st.download_button("Download CSV", data=chosen.read_bytes(), file_name=chosen.name, mime="text/csv")
@@ -581,7 +645,7 @@ def main() -> None:
         page_title="HNS Sales Dashboard (Modular)",
         page_icon="HNS",
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state=infer_initial_sidebar_state(),
     )
 
     if "dark_mode" not in st.session_state:
@@ -602,6 +666,8 @@ def main() -> None:
         st.session_state.active_tab = "overview"
 
     load_custom_css()
+    responsive = get_responsive_context()
+    st.session_state["responsive_tier"] = responsive.tier
 
     auth_slot = st.empty()
     if not st.session_state.get("authenticated", False):
@@ -617,18 +683,19 @@ def main() -> None:
         st.stop()
     update_activity()
 
-    st.sidebar.title("Dashboard Controls")
-
-    if st.sidebar.button("Logout"):
-        logout_user()
-        st.rerun()
-
     user_record = st.session_state.get("user", {}) or {}
     role = str(user_record.get("role", "user")).lower()
 
     navbar_config = app_config.AppConfig.NAVBAR_ITEMS
 
-    if st.sidebar.checkbox("Dark Mode", value=st.session_state.get("dark_mode", False)):
+    st.sidebar.title("Dashboard Controls")
+    render_layout_mode_control(st.sidebar)
+
+    if st.sidebar.button("Logout", key="dashboard_logout_btn", width="stretch"):
+        logout_user()
+        st.rerun()
+
+    if st.sidebar.checkbox("Dark Mode", value=st.session_state.get("dark_mode", False), key="dashboard_dark_mode_toggle"):
         if not st.session_state.get("dark_mode"):
             st.session_state.dark_mode = True
             st.rerun()
@@ -646,6 +713,7 @@ def main() -> None:
         "Quick Select",
         ["Custom", "Today", "Yesterday", "This Week", "Last Week",
          "This Month", "Last Month", "This Quarter", "This Year"],
+        key="dashboard_date_preset",
     )
 
     # Presets come from `get_date_presets`; do not override them here.
@@ -653,8 +721,8 @@ def main() -> None:
     start_date, end_date = get_date_presets(date_preset)
 
     if date_preset == "Custom":
-        start_date = st.sidebar.date_input("Start Date", start_date)
-        end_date = st.sidebar.date_input("End Date", end_date)
+        start_date = st.sidebar.date_input("Start Date", start_date, key="dashboard_start_date")
+        end_date = st.sidebar.date_input("End Date", end_date, key="dashboard_end_date")
     else:
         st.sidebar.caption(f"Using preset range: {start_date} → {end_date}")
 
@@ -675,6 +743,7 @@ def main() -> None:
         ["Filtered", "Unfiltered"],
         index=0 if QR_TOGGLES.blocked_mode_default.lower() == "filtered" else 1,
         help="Filtered mode excludes blocked customers and comments",
+        key="dashboard_data_mode",
     )
 
     branch_name_map = {int(k): str(v) for k, v in BRANCH_NAMES.items()}
@@ -710,6 +779,7 @@ def main() -> None:
         "Select Branches",
         options=allowed_branches,
         default=allowed_branches,
+        key="dashboard_selected_branches",
         format_func=lambda x: branch_name_map.get(int(x), f"Branch {x}"),
     )
 
@@ -721,10 +791,11 @@ def main() -> None:
     if add_vertical_space is not None:
         add_vertical_space(1)
     st.sidebar.header("Target Period")
-    target_year = st.sidebar.number_input("Year", 2000, 2100, 2026, 1)
+    target_year = st.sidebar.number_input("Year", 2000, 2100, 2026, 1, key="dashboard_target_year")
     target_month = st.sidebar.selectbox(
         "Month", range(1, 13),
         index=datetime.now().month - 1,
+        key="dashboard_target_month",
         format_func=lambda x: datetime(2000, x, 1).strftime("%B"),
     )
 
@@ -753,13 +824,14 @@ def main() -> None:
                 st.rerun()
 
     with col2:
-        auto_refresh = st.checkbox("Auto", value=st.session_state.auto_refresh)
+        auto_refresh = st.checkbox("Auto", value=st.session_state.auto_refresh, key="dashboard_auto_refresh")
         if auto_refresh != st.session_state.auto_refresh:
             st.session_state.auto_refresh = auto_refresh
 
     warm_cache = st.sidebar.checkbox(
         "Warm Cache in Background",
         value=st.session_state.get("warm_cache_enabled", False),
+        key="dashboard_warm_cache",
         help="Preloads common queries after filters are set. If UI becomes unstable/blank, turn this off.",
     )
     st.session_state.warm_cache_enabled = warm_cache
@@ -831,6 +903,113 @@ def main() -> None:
 
     branch_labels = [branch_name_map.get(int(b), f"Branch {b}") for b in selected_branches]
     title_text = "HNS Sales Dashboard" if is_all_allowed_selected else f"HNS Sales Dashboard: {', '.join(branch_labels)}"
+
+    if responsive.is_phone:
+        mobile_layout_default = st.session_state.get("mobile_responsive_view_mode", st.session_state.get("responsive_view_mode", "Auto"))
+        if mobile_layout_default not in {"Auto", "Desktop", "Tablet", "Phone"}:
+            mobile_layout_default = "Auto"
+        if "mobile_date_preset" not in st.session_state:
+            st.session_state["mobile_date_preset"] = st.session_state.get("dashboard_date_preset", date_preset)
+        if "mobile_selected_branches" not in st.session_state:
+            st.session_state["mobile_selected_branches"] = list(selected_branches)
+        if "mobile_data_mode" not in st.session_state:
+            st.session_state["mobile_data_mode"] = data_mode
+        if "mobile_target_year" not in st.session_state:
+            st.session_state["mobile_target_year"] = int(target_year)
+        if "mobile_target_month" not in st.session_state:
+            st.session_state["mobile_target_month"] = int(target_month)
+        if "mobile_dark_mode" not in st.session_state:
+            st.session_state["mobile_dark_mode"] = bool(st.session_state.get("dark_mode", False))
+        if "mobile_auto_refresh" not in st.session_state:
+            st.session_state["mobile_auto_refresh"] = bool(st.session_state.get("auto_refresh", False))
+        if "mobile_warm_cache" not in st.session_state:
+            st.session_state["mobile_warm_cache"] = bool(st.session_state.get("warm_cache_enabled", False))
+        if "mobile_responsive_view_mode" not in st.session_state:
+            st.session_state["mobile_responsive_view_mode"] = mobile_layout_default
+
+        with st.expander("Filters & Controls", expanded=False):
+            st.caption(f"Detected layout: {responsive.tier.title()} ({responsive.source.replace('_', ' ')})")
+            mobile_layout_mode = st.selectbox(
+                "Layout Mode",
+                ["Auto", "Desktop", "Tablet", "Phone"],
+                index=["Auto", "Desktop", "Tablet", "Phone"].index(mobile_layout_default),
+                key="mobile_responsive_view_mode",
+            )
+            mobile_dark_mode = st.checkbox("Dark Mode", value=st.session_state["mobile_dark_mode"], key="mobile_dark_mode")
+
+            mobile_date_preset = st.selectbox(
+                "Quick Select",
+                ["Custom", "Today", "Yesterday", "This Week", "Last Week", "This Month", "Last Month", "This Quarter", "This Year"],
+                index=["Custom", "Today", "Yesterday", "This Week", "Last Week", "This Month", "Last Month", "This Quarter", "This Year"].index(st.session_state["mobile_date_preset"]),
+                key="mobile_date_preset",
+            )
+            mobile_start_date, mobile_end_date = get_date_presets(mobile_date_preset)
+            if mobile_date_preset == "Custom":
+                mobile_start_date = st.date_input("Start Date", value=start_date, key="mobile_start_date")
+                mobile_end_date = st.date_input("End Date", value=end_date, key="mobile_end_date")
+            else:
+                st.caption(f"Using preset range: {mobile_start_date} -> {mobile_end_date}")
+
+            mobile_data_mode = st.radio(
+                "Data Mode",
+                ["Filtered", "Unfiltered"],
+                index=0 if st.session_state.get("mobile_data_mode", data_mode) == "Filtered" else 1,
+                key="mobile_data_mode",
+                help="Filtered mode excludes blocked customers and comments",
+            )
+            mobile_selected_branches = st.multiselect(
+                "Select Branches",
+                options=allowed_branches,
+                default=[b for b in st.session_state["mobile_selected_branches"] if b in allowed_branches] or allowed_branches,
+                key="mobile_selected_branches",
+                format_func=lambda x: branch_name_map.get(int(x), f"Branch {x}"),
+            )
+            mobile_target_year = st.number_input("Year", 2000, 2100, int(st.session_state["mobile_target_year"]), 1, key="mobile_target_year")
+            mobile_target_month = st.selectbox(
+                "Month",
+                range(1, 13),
+                index=int(st.session_state["mobile_target_month"]) - 1,
+                key="mobile_target_month",
+                format_func=lambda x: datetime(2000, x, 1).strftime("%B"),
+            )
+            mobile_auto_refresh = st.checkbox("Auto Refresh", value=st.session_state["mobile_auto_refresh"], key="mobile_auto_refresh")
+            mobile_warm_cache = st.checkbox("Warm Cache in Background", value=st.session_state["mobile_warm_cache"], key="mobile_warm_cache")
+
+            apply_col, refresh_col = st.columns(2)
+            with apply_col:
+                if st.button("Apply Mobile Filters", key="mobile_apply_filters", width="stretch"):
+                    if mobile_date_preset == "Custom":
+                        st.session_state["dashboard_start_date"] = mobile_start_date
+                        st.session_state["dashboard_end_date"] = mobile_end_date
+                    st.session_state["responsive_view_mode"] = mobile_layout_mode
+                    st.session_state["dashboard_dark_mode_toggle"] = mobile_dark_mode
+                    st.session_state["dashboard_date_preset"] = mobile_date_preset
+                    st.session_state["dashboard_data_mode"] = mobile_data_mode
+                    st.session_state["dashboard_selected_branches"] = mobile_selected_branches or list(allowed_branches)
+                    st.session_state["dashboard_target_year"] = int(mobile_target_year)
+                    st.session_state["dashboard_target_month"] = int(mobile_target_month)
+                    st.session_state["dashboard_auto_refresh"] = mobile_auto_refresh
+                    st.session_state["dashboard_warm_cache"] = mobile_warm_cache
+                    st.session_state["dark_mode"] = mobile_dark_mode
+                    st.session_state["auto_refresh"] = mobile_auto_refresh
+                    st.session_state["warm_cache_enabled"] = mobile_warm_cache
+                    st.rerun()
+            with refresh_col:
+                if st.button("Refresh Now", key="mobile_refresh_btn", width="stretch"):
+                    with st.spinner("Refreshing data..."):
+                        try:
+                            refresh_all_caches()
+                            st.session_state.last_refresh = datetime.now()
+                            st.session_state.mod_cache_epoch += 1
+                            st.session_state.mod_cache = {}
+                            _toast("Data refreshed.", severity="success")
+                        except Exception as e:
+                            _toast(f"Refresh failed: {e}", severity="error")
+                        time.sleep(1)
+                        st.rerun()
+
+    responsive = get_responsive_context()
+    st.session_state["responsive_tier"] = responsive.tier
 
     st.title(title_text)
     st.caption(f"Period: {start_date_str} to {end_date_str} | Mode: {data_mode}")

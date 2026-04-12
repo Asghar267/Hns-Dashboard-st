@@ -19,6 +19,7 @@ from modules.database import (
     get_cached_stale_branches_all,
 )
 from modules.utils import format_currency
+from modules.responsive import clamp_dataframe_height, get_responsive_context, responsive_columns
 
 
 class DatabaseHealthDiagnosticsTab:
@@ -29,6 +30,7 @@ class DatabaseHealthDiagnosticsTab:
         self.end_date = end_date
         self.selected_branches = selected_branches
         self.data_mode = data_mode
+        self.responsive = get_responsive_context()
 
     def render(self):
         st.header("Database Health Diagnostics")
@@ -74,14 +76,14 @@ class DatabaseHealthDiagnosticsTab:
             blank_rows = int(pd.to_numeric(df_quality.iloc[0].get("cust_name_blank", 0), errors="coerce") or 0)
             blank_pct = (blank_rows / rows_total * 100.0) if rows_total > 0 else 0.0
 
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
+        cols = responsive_columns(self.responsive, desktop=4, tablet=2, phone=1)
+        with cols[0]:
             st.metric("Max Days Since Sale", f"{max_days}")
-        with c2:
+        with cols[1 % len(cols)]:
             st.metric("Stale Selected Branches", f"{stale_selected}")
-        with c3:
+        with cols[2 % len(cols)]:
             st.metric("Lineitem Orphans", f"{lineitem_orphans}")
-        with c4:
+        with cols[3 % len(cols)]:
             st.metric("Blank Cust_name Rows", f"{blank_rows:,} ({blank_pct:.1f}%)")
 
         if sales_orphans > 0:
@@ -136,14 +138,14 @@ class DatabaseHealthDiagnosticsTab:
             return
 
         row = df.iloc[0].to_dict()
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
+        cols = responsive_columns(self.responsive, desktop=4, tablet=2, phone=1)
+        with cols[0]:
             st.metric("Orders (Unfiltered)", f"{int(row.get('orders_unfiltered', 0)):,}")
-        with c2:
+        with cols[1 % len(cols)]:
             st.metric("Orders (Filtered)", f"{int(row.get('orders_filtered', 0)):,}")
-        with c3:
+        with cols[2 % len(cols)]:
             st.metric("Orders Excluded", f"{int(row.get('orders_excluded_est', 0)):,}")
-        with c4:
+        with cols[3 % len(cols)]:
             st.metric("Sales Excluded", format_currency(float(row.get("sales_excluded_est", 0.0))))
 
         self._render_table(df, height=140)
@@ -200,6 +202,11 @@ class DatabaseHealthDiagnosticsTab:
 
     def _render_table(self, data, width: str = "stretch", height: Optional[int] = None):
         kwargs = {"width": width, "hide_index": True}
-        if height is not None:
-            kwargs["height"] = height
+        kwargs["height"] = clamp_dataframe_height(
+            self.responsive,
+            desktop=height,
+            tablet=max(220, int((height or 420) * 0.82)),
+            phone=max(200, int((height or 420) * 0.68)),
+            kind="default" if height is None else "compact",
+        )
         st.dataframe(data, **kwargs)

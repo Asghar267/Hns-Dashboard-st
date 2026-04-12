@@ -33,6 +33,12 @@ from modules.visualization import (
     create_heatmap,
     create_sankey_diagram
 )
+from modules.responsive import (
+    apply_plotly_responsive_layout,
+    clamp_dataframe_height,
+    get_responsive_context,
+    responsive_columns,
+)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -96,6 +102,7 @@ class OverviewTab:
         self.df_branch = None
         self.df_ot = None
         self.df_order_types = None
+        self.responsive = get_responsive_context()
 
         # Targets for overview cards/charts (month derived from end_date)
         try:
@@ -188,13 +195,19 @@ class OverviewTab:
         
         # Overall Performance (gauge) + Branch-wise Performance (heatmap) in one row
         st.subheader("Overall & Branch-wise Performance")
-        c1, c2 = st.columns(2)
-        with c1:
+        charts = responsive_columns(self.responsive, desktop=2, tablet=2, phone=1)
+        with charts[0]:
             gauge_fig = create_achievement_gauge(overall_achievement, "Overall Achievement")
-            st.plotly_chart(gauge_fig, width="stretch")
-        with c2:
+            st.plotly_chart(
+                apply_plotly_responsive_layout(gauge_fig, self.responsive, desktop_height=360, tablet_height=340, phone_height=300),
+                width="stretch",
+            )
+        with charts[min(1, len(charts) - 1)]:
             heatmap_fig = create_heatmap(df_branch_display)
-            st.plotly_chart(heatmap_fig, width="stretch")
+            st.plotly_chart(
+                apply_plotly_responsive_layout(heatmap_fig, self.responsive, desktop_height=420, tablet_height=360, phone_height=320),
+                width="stretch",
+            )
         
         # Individual branch cards
         self._render_branch_cards(df_branch_display)
@@ -204,7 +217,10 @@ class OverviewTab:
         # Waterfall Chart for Target Breakdown
         st.subheader("Target Achievement Breakdown")
         waterfall_fig = create_waterfall_chart(df_branch_display)
-        st.plotly_chart(waterfall_fig, width="stretch")
+        st.plotly_chart(
+            apply_plotly_responsive_layout(waterfall_fig, self.responsive, desktop_height=420, tablet_height=360, phone_height=320),
+            width="stretch",
+        )
         
         st.markdown("---")
         self._render_daily_sales_by_branch()
@@ -218,25 +234,25 @@ class OverviewTab:
 
     def _render_summary_metrics(self, total_sales: float, total_target: float, total_remaining: float, overall_achievement: float):
         """Render summary metrics cards"""
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
+        metric_cols = responsive_columns(self.responsive, desktop=4, tablet=2, phone=1)
+
+        with metric_cols[0]:
             st.markdown(f"""
                 <div class="metric-card">
                     <div class="metric-label">Total Sales</div>
                     <div class="metric-value">{format_currency(total_sales)}</div>
                 </div>
             """, unsafe_allow_html=True)
-        
-        with col2:
+
+        with metric_cols[1 % len(metric_cols)]:
             st.markdown(f"""
                 <div class="metric-card">
                     <div class="metric-label">Total Target</div>
                     <div class="metric-value">{format_currency(total_target)}</div>
                 </div>
             """, unsafe_allow_html=True)
-        
-        with col3:
+
+        with metric_cols[2 % len(metric_cols)]:
             st.markdown(f"""
                 <div class="metric-card">
                     <div class="metric-label">Remaining</div>
@@ -244,7 +260,7 @@ class OverviewTab:
                 </div>
             """, unsafe_allow_html=True)
 
-        with col4:
+        with metric_cols[3 % len(metric_cols)]:
             achievement_class = (
                 'success-metric' if overall_achievement >= 100 
                 else 'warning-metric' if overall_achievement >= 70 
@@ -272,10 +288,10 @@ class OverviewTab:
 
         max_days = int(df_health["days_since_last_sale"].max()) if "days_since_last_sale" in df_health.columns else 0
         stale_count = int((df_health["days_since_last_sale"] > 1).sum()) if "days_since_last_sale" in df_health.columns else 0
-        col1, col2 = st.columns(2)
-        with col1:
+        cols = responsive_columns(self.responsive, desktop=2, tablet=2, phone=1)
+        with cols[0]:
             st.metric("Max Days Since Last Sale", f"{max_days}")
-        with col2:
+        with cols[1 % len(cols)]:
             st.metric("Branches Stale (>1 day)", f"{stale_count}")
 
         display = df_health.copy()
@@ -314,10 +330,10 @@ class OverviewTab:
             help="Turn off to speed up initial load; turn on when you need top product details.",
         )
 
-        col_a, col_b, col_c = st.columns(3)
+        top_cols = responsive_columns(self.responsive, desktop=3, tablet=2, phone=1)
 
         # Top 5 Chef Sales (by product revenue)
-        with col_a:
+        with top_cols[0]:
             st.markdown("**Chef Sales - Top 5 Products**")
             if not load_top_products:
                 st.caption("Skipped (toggle on to load).")
@@ -337,7 +353,7 @@ class OverviewTab:
                     st.info("No chef sales data")
 
         # Top 5 Line Item Sub-Products (product names)
-        with col_b:
+        with top_cols[1 % len(top_cols)]:
             st.markdown("**Line Item Sub-Products - Top 5**")
             try:
                 if not load_top_products:
@@ -361,7 +377,7 @@ class OverviewTab:
                 st.info("No product data for current month")
 
         # Top 5 OT Sales
-        with col_c:
+        with top_cols[2 % len(top_cols)]:
             st.markdown("**OT Sales - Top 5**")
             if self.df_ot is None:
                 with perf_trace("Overview fetch (OT sales)", "db"):
@@ -381,17 +397,17 @@ class OverviewTab:
 
     def _render_branch_cards(self, df_branch_display: pd.DataFrame):
         """Render individual branch performance cards"""
-        cols = st.columns(2)
+        cols = responsive_columns(self.responsive, desktop=2, tablet=2, phone=1)
         for idx, (_, row) in enumerate(df_branch_display.iterrows()):
-            with cols[idx % 2]:
+            with cols[idx % len(cols)]:
                 with st.expander(f"📌 {row['shop_name']} (ID: {int(row['shop_id'])})", expanded=True):
                     # Metrics in a cleaner layout
-                    col1, col2 = st.columns(2)
-                    col1.metric("Current Sales", format_currency(row['total_Nt_amount']))
+                    branch_metric_cols = responsive_columns(self.responsive, desktop=2, tablet=2, phone=1)
+                    branch_metric_cols[0].metric("Current Sales", format_currency(row['total_Nt_amount']))
                     if 'Monthly_Target' in row:
-                        col2.metric("Monthly Target", format_currency(row['Monthly_Target']))
-                        col1.metric("Remaining", format_currency(row['Remaining_Target']))
-                        col2.metric("Achievement", format_percentage(row['Achievement_%']))
+                        branch_metric_cols[1 % len(branch_metric_cols)].metric("Monthly Target", format_currency(row['Monthly_Target']))
+                        branch_metric_cols[0].metric("Remaining", format_currency(row['Remaining_Target']))
+                        branch_metric_cols[1 % len(branch_metric_cols)].metric("Achievement", format_percentage(row['Achievement_%']))
 
     def _render_daily_sales_by_branch(self):
         """Render daily sales by branch for last 30 days"""
@@ -459,16 +475,19 @@ class OverviewTab:
         if self.df_order_types is not None and not self.df_order_types.empty:
             # Sankey Diagram
             sankey_fig = create_sankey_diagram(self.df_order_types)
-            st.plotly_chart(sankey_fig, width="stretch")
+            st.plotly_chart(
+                apply_plotly_responsive_layout(sankey_fig, self.responsive, desktop_height=520, tablet_height=420, phone_height=340),
+                width="stretch",
+            )
             
             # Order type metrics
-            col1, col2, col3 = st.columns(3)
+            metric_cols = responsive_columns(self.responsive, desktop=3, tablet=2, phone=1)
             
             order_types_display = ['Food Panda', 'Delivery', 'Dine IN']
             for idx, ot in enumerate(order_types_display):
                 ot_data = self.df_order_types[self.df_order_types['order_type'] == ot]
                 if not ot_data.empty:
-                    with [col1, col2, col3][idx]:
+                    with metric_cols[idx % len(metric_cols)]:
                         sales = ot_data['total_sales'].iloc[0]
                         orders = ot_data['total_orders'].iloc[0]
                         st.metric(
@@ -585,6 +604,11 @@ class OverviewTab:
             "width": width,
             "hide_index": hide_index
         }
-        if height is not None:
-            kwargs["height"] = height
+        kwargs["height"] = clamp_dataframe_height(
+            self.responsive,
+            desktop=height,
+            tablet=max(220, int((height or 420) * 0.82)),
+            phone=max(200, int((height or 420) * 0.68)),
+            kind="default" if height is None else "compact",
+        )
         st.dataframe(data, **kwargs)

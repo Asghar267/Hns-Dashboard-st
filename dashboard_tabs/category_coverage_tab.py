@@ -20,6 +20,7 @@ from modules.database import (
     _normalize_category_name,
 )
 from modules.utils import format_currency
+from modules.responsive import clamp_dataframe_height, get_responsive_context, responsive_columns
 
 
 class CategoryCoverageTab:
@@ -36,6 +37,7 @@ class CategoryCoverageTab:
         self.selected_branches = selected_branches
         self.data_mode = data_mode
         self.key_prefix = key_prefix
+        self.responsive = get_responsive_context()
 
     def render(self) -> None:
         st.header("📊 Category Filters & Coverage")
@@ -80,7 +82,10 @@ class CategoryCoverageTab:
                 if unmapped_exists:
                     st.info(f"📦 + Unmapped products (not included in filter)")
 
-                btn_col1, btn_col2, btn_col3 = st.columns(3)
+                btn_cols = responsive_columns(self.responsive, desktop=3, tablet=2, phone=1)
+                btn_col1 = btn_cols[0]
+                btn_col2 = btn_cols[1 % len(btn_cols)]
+                btn_col3 = btn_cols[2 % len(btn_cols)]
                 with btn_col1:
                     if st.button("✓ Select All", key=f"{self.key_prefix}_sel_all_cov", width="stretch"):
                         st.session_state[f"{self.key_prefix}_selected_cov"] = category_options.copy()
@@ -106,7 +111,7 @@ class CategoryCoverageTab:
 
             # Save/Reset buttons (always visible)
             st.divider()
-            btn_col1, btn_col2 = st.columns([2, 1])
+            btn_col1, btn_col2 = responsive_columns(self.responsive, desktop=2, tablet=2, phone=1)
             with btn_col1:
                 save_clicked = st.button("💾 Save Configuration", width="stretch", type="primary", key=f"{self.key_prefix}_save_cfg")
             with btn_col2:
@@ -155,7 +160,7 @@ class CategoryCoverageTab:
             # Show status if any filters are applied
             if inc_count > 0 or exc_count > 0:
                 st.divider()
-                status_col1, status_col2 = st.columns(2)
+                status_col1, status_col2 = responsive_columns(self.responsive, desktop=2, tablet=2, phone=1)
                 with status_col1:
                     if inc_count > 0:
                         st.info(f"✅ **{inc_count}** categories included")
@@ -210,14 +215,14 @@ class CategoryCoverageTab:
             excluded_df = df_cov[df_cov["counted"] == False].copy()
 
             # Key metrics - based on ACTUAL sales data
-            m1, m2, m3, m4 = st.columns(4)
-            with m1:
+            metric_cols = responsive_columns(self.responsive, desktop=4, tablet=2, phone=1)
+            with metric_cols[0]:
                 st.metric("📊 Total Categories", f"{len(df_cov)}", border=True)
-            with m2:
+            with metric_cols[1 % len(metric_cols)]:
                 st.metric("✅ Counted", f"{len(counted_df)}", border=True)
-            with m3:
+            with metric_cols[2 % len(metric_cols)]:
                 st.metric("❌ Excluded", f"{len(excluded_df)}", border=True)
-            with m4:
+            with metric_cols[3 % len(metric_cols)]:
                 st.metric("💰 Impact", f"PKR {excluded_df['total_sales'].sum():,.0f}", border=True)
 
             # Tabs for different views
@@ -230,7 +235,7 @@ class CategoryCoverageTab:
                     ]].copy()
                     display_counted.columns = ["Category", "Qty", "Sales (PKR)"]
                     display_counted["Sales (PKR)"] = display_counted["Sales (PKR)"].apply(lambda x: f"{x:,.0f}")
-                    st.dataframe(display_counted, width="stretch", hide_index=True, height=400)
+                    st.dataframe(display_counted, width="stretch", hide_index=True, height=clamp_dataframe_height(self.responsive, desktop=400, tablet=320, phone=260, kind="default"))
                 else:
                     st.info("No included categories")
 
@@ -241,17 +246,17 @@ class CategoryCoverageTab:
                     ]].copy()
                     display_excluded.columns = ["Category", "Qty", "Sales (PKR)"]
                     display_excluded["Sales (PKR)"] = display_excluded["Sales (PKR)"].apply(lambda x: f"{x:,.0f}")
-                    st.dataframe(display_excluded, width="stretch", hide_index=True, height=400)
+                    st.dataframe(display_excluded, width="stretch", hide_index=True, height=clamp_dataframe_height(self.responsive, desktop=400, tablet=320, phone=260, kind="default"))
                 else:
                     st.info("No excluded categories")
 
             with tab3:
                 st.write("**Coverage Summary:**")
-                col1, col2 = st.columns(2)
-                with col1:
+                detail_cols = responsive_columns(self.responsive, desktop=2, tablet=2, phone=1)
+                with detail_cols[0]:
                     st.write(f"- Included Sales: PKR {counted_df['total_sales'].sum():,.0f}")
                     st.write(f"- Excluded Sales: PKR {excluded_df['total_sales'].sum():,.0f}")
-                with col2:
+                with detail_cols[1 % len(detail_cols)]:
                     total_sales = df_cov['total_sales'].sum()
                     exc_impact_pct = (excluded_df['total_sales'].sum() / total_sales * 100) if total_sales > 0 else 0
                     st.write(f"- Total Sales: PKR {total_sales:,.0f}")
@@ -295,39 +300,39 @@ class CategoryCoverageTab:
             combined_pct = (combined_impact / total_unfiltered_raw * 100.0) if total_unfiltered_raw > 0 else 0.0
 
             # Improved metrics display
-            col1, col2 = st.columns(2)
+            top_cols = responsive_columns(self.responsive, desktop=2, tablet=1, phone=1)
 
-            with col1:
+            with top_cols[0]:
                 st.markdown("**Base Sales (No Filters)**")
-                m1, m2 = st.columns(2)
-                with m1:
+                left_metrics = responsive_columns(self.responsive, desktop=2, tablet=2, phone=1)
+                with left_metrics[0]:
                     st.metric("💰 Raw Total", format_currency(total_unfiltered_raw), border=True)
-                with m2:
+                with left_metrics[1 % len(left_metrics)]:
                     st.metric("🚫 After Blocking", format_currency(total_blocked_only), border=True)
 
-            with col2:
+            with top_cols[1 % len(top_cols)]:
                 st.markdown("**With Category Filters**")
-                m3, m4 = st.columns(2)
-                with m3:
+                right_metrics = responsive_columns(self.responsive, desktop=2, tablet=2, phone=1)
+                with right_metrics[0]:
                     st.metric("📊 Category Only", format_currency(total_category_only), border=True)
-                with m4:
+                with right_metrics[1 % len(right_metrics)]:
                     st.metric("✅ Both Applied", format_currency(total_both), border=True)
 
             # Impact summary
             st.markdown("**Impact Summary:**")
-            impact_col1, impact_col2, impact_col3 = st.columns(3)
+            impact_cols = responsive_columns(self.responsive, desktop=3, tablet=2, phone=1)
 
-            with impact_col1:
+            with impact_cols[0]:
                 st.write(f"**Blocked Impact:**")
                 st.write(f"- Amount: PKR {blocked_impact:,.0f}")
                 st.write(f"- Percentage: {blocked_pct:.1f}%")
 
-            with impact_col2:
+            with impact_cols[1 % len(impact_cols)]:
                 st.write(f"**Category Impact:**")
                 st.write(f"- Amount: PKR {category_impact:,.0f}")
                 st.write(f"- Percentage: {category_pct:.1f}%")
 
-            with impact_col3:
+            with impact_cols[2 % len(impact_cols)]:
                 st.write(f"**Combined Impact:**")
                 st.write(f"- Amount: PKR {combined_impact:,.0f}")
                 st.write(f"- Percentage: {combined_pct:.1f}%")
@@ -383,7 +388,7 @@ class CategoryCoverageTab:
                 ).sort_values("shop_id")
 
                 st.subheader("🏪 Branch-wise Impact Breakdown")
-                st.dataframe(show, width="stretch", hide_index=True, height=340)
+                st.dataframe(show, width="stretch", hide_index=True, height=clamp_dataframe_height(self.responsive, desktop=340, tablet=300, phone=240, kind="default"))
             else:
                 st.info("No branch impact data available for this period/branches.")
 
@@ -413,10 +418,10 @@ class CategoryCoverageTab:
                 df_impact["Block_Reason"] = df_impact.apply(get_block_reason, axis=1)
 
                 # Show summary metrics
-                b1, b2 = st.columns(2)
-                with b1:
+                block_cols = responsive_columns(self.responsive, desktop=2, tablet=2, phone=1)
+                with block_cols[0]:
                     st.metric("💰 Total Blocked Sales", format_currency(total_impact), border=True)
-                with b2:
+                with block_cols[1 % len(block_cols)]:
                     st.metric("🚫 Blocked Transactions", f"{count_impact:,}", border=True)
 
                 # Branch summary
@@ -428,7 +433,7 @@ class CategoryCoverageTab:
                 )
                 df_branch_sum["blocked_sales_sum"] = df_branch_sum["blocked_sales_sum"].apply(lambda x: f"PKR {x:,.0f}")
                 df_branch_sum.columns = ["Branch ID", "Branch Name", "Blocked Sales", "Transaction Count"]
-                st.dataframe(df_branch_sum, width="stretch", hide_index=True, height=260)
+                st.dataframe(df_branch_sum, width="stretch", hide_index=True, height=clamp_dataframe_height(self.responsive, desktop=260, tablet=240, phone=220, kind="compact"))
 
                 # Blocking rules breakdown
                 st.markdown("**By Blocking Rule:**")
@@ -441,7 +446,7 @@ class CategoryCoverageTab:
                 sales_by_rule["Total Sales (PKR)"] = sales_by_rule["Total Sales (PKR)"].apply(lambda x: f"PKR {x:,.0f}")
 
                 rule_detailed = rule_summary.merge(sales_by_rule, on="Blocked Item")
-                st.dataframe(rule_detailed, width="stretch", hide_index=True, height=260)
+                st.dataframe(rule_detailed, width="stretch", hide_index=True, height=clamp_dataframe_height(self.responsive, desktop=260, tablet=240, phone=220, kind="compact"))
 
                 # Detailed transaction view
                 with st.expander("📋 View All Blocked Transactions", expanded=False):
@@ -464,7 +469,7 @@ class CategoryCoverageTab:
                     df_show = df_display[list(display_cols.keys())].rename(columns=display_cols)
                     df_show = df_show.sort_values("Date", ascending=False)
 
-                    st.dataframe(df_show, width="stretch", hide_index=True, height=500)
+                    st.dataframe(df_show, width="stretch", hide_index=True, height=clamp_dataframe_height(self.responsive, desktop=500, tablet=380, phone=300, kind="tall"))
 
         with main_tab4:
             st.subheader("📦 Unmapped Products")
@@ -482,12 +487,12 @@ class CategoryCoverageTab:
                 total_unmapped_qty = df_unmapped["total_qty"].sum()
                 unmapped_count = len(df_unmapped)
 
-                um1, um2, um3 = st.columns(3)
-                with um1:
+                unmapped_cols = responsive_columns(self.responsive, desktop=3, tablet=2, phone=1)
+                with unmapped_cols[0]:
                     st.metric("💰 Sales", f"PKR {total_unmapped_sales:,.0f}", border=True)
-                with um2:
+                with unmapped_cols[1 % len(unmapped_cols)]:
                     st.metric("📦 Qty", f"{total_unmapped_qty:,.0f}", border=True)
-                with um3:
+                with unmapped_cols[2 % len(unmapped_cols)]:
                     st.metric("🔗 Products", f"{unmapped_count}", border=True)
 
                 # Display table
@@ -495,4 +500,4 @@ class CategoryCoverageTab:
                 df_display_unmapped = df_unmapped.copy()
                 if "total_sales" in df_display_unmapped.columns:
                     df_display_unmapped["total_sales"] = df_display_unmapped["total_sales"].apply(lambda x: f"PKR {x:,.0f}")
-                st.dataframe(df_display_unmapped, width="stretch", hide_index=True, height=350)
+                st.dataframe(df_display_unmapped, width="stretch", hide_index=True, height=clamp_dataframe_height(self.responsive, desktop=350, tablet=300, phone=240, kind="default"))

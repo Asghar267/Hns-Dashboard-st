@@ -26,6 +26,11 @@ from modules.utils import (
     perf_trace,
 )
 from modules.config import BLOCKED_NAMES, BLOCKED_COMMENTS
+from modules.responsive import (
+    clamp_dataframe_height,
+    get_responsive_context,
+    responsive_columns,
+)
 
 
 @st.cache_data(ttl=DatabaseConfig.CACHE_TTL)
@@ -176,6 +181,7 @@ class QRCommissionTab:
         self.selected_branches = selected_branches
         self.data_mode = data_mode
         self.allowed_tables = allowed_tables
+        self.responsive = get_responsive_context()
 
     def render_qr_commission(self, commission_rate: float = 2.0):
         """Render the QR Commission dashboard"""
@@ -247,11 +253,11 @@ class QRCommissionTab:
                 total_tx = len(df_merged)
 
                 with st.container():
-                    col1, col2, col3, col4 = st.columns(4)
-                    col1.metric("Total QR Sales", format_currency(total_sale))
-                    col2.metric("Candelahns Commission", format_currency(total_cand_comm))
-                    col3.metric("Indoge Commission", format_currency(total_indoge_comm))
-                    col4.metric("Transactions", f"{total_tx:,}")
+                    top_cols = responsive_columns(self.responsive, desktop=4, tablet=2, phone=1)
+                    top_cols[0].metric("Total QR Sales", format_currency(total_sale))
+                    top_cols[1 % len(top_cols)].metric("Candelahns Commission", format_currency(total_cand_comm))
+                    top_cols[2 % len(top_cols)].metric("Indoge Commission", format_currency(total_indoge_comm))
+                    top_cols[3 % len(top_cols)].metric("Transactions", f"{total_tx:,}")
             else:
                 df_merged = pd.DataFrame()
 
@@ -260,10 +266,10 @@ class QRCommissionTab:
             df_total_sales["employee_code"] = df_total_sales.get("employee_code", "").fillna("").astype(str)
 
         st.markdown("### Split Report Controls")
-        c1, c2, c3 = st.columns(3)
-        with c1:
+        split_cols = responsive_columns(self.responsive, desktop=3, tablet=2, phone=1)
+        with split_cols[0]:
             employee_search = st.text_input("Search Employee", key="qr_split_employee_search")
-        with c2:
+        with split_cols[1 % len(split_cols)]:
             branch_options = sorted(df_total_sales['shop_name'].dropna().astype(str).unique().tolist()) if not df_total_sales.empty else []
             selected_branch_names = st.multiselect(
                 "Branches in report",
@@ -271,7 +277,7 @@ class QRCommissionTab:
                 default=branch_options,
                 key="qr_split_branch_filter"
             )
-        with c3:
+        with split_cols[2 % len(split_cols)]:
             include_zero_rows = st.checkbox("Include zero rows", value=True, key="qr_split_include_zero")
             include_unassigned = st.checkbox("Include Online/Unassigned", value=True, key="qr_split_include_unassigned")
 
@@ -335,12 +341,12 @@ class QRCommissionTab:
             k_comm = split_report_filtered['commission_total_sales'].sum() if not split_report_filtered.empty else 0.0
             k_share = (k_blink / k_all * 100) if k_all else 0.0
 
-            m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Total Sales", format_currency(k_all))
-            m2.metric("Blinkco Sales", format_currency(k_blink))
-            m3.metric("Sales w/o Blinkco", format_currency(k_wo))
-            m4.metric("Commission on Total", format_currency(k_comm))
-            m5.metric("Blinkco Share", f"{k_share:.2f}%")
+            kpi_cols = responsive_columns(self.responsive, desktop=5, tablet=2, phone=1)
+            kpi_cols[0].metric("Total Sales", format_currency(k_all))
+            kpi_cols[1 % len(kpi_cols)].metric("Blinkco Sales", format_currency(k_blink))
+            kpi_cols[2 % len(kpi_cols)].metric("Sales w/o Blinkco", format_currency(k_wo))
+            kpi_cols[3 % len(kpi_cols)].metric("Commission on Total", format_currency(k_comm))
+            kpi_cols[4 % len(kpi_cols)].metric("Blinkco Share", f"{k_share:.2f}%")
 
             st.markdown("---")
             if _allow("Split Report"):
@@ -746,16 +752,16 @@ class QRCommissionTab:
 
                                     cand_total = float(tx["total_sale"].sum())
                                     ind_total = float(tx["Indoge_total_price"].sum())
-                                    c1, c2, c3, c4 = st.columns(4)
-                                    c1.metric("Candela Total", f"{cand_total:,.0f}")
-                                    c2.metric("Indoge Total", f"{ind_total:,.0f}")
-                                    c3.metric("Indoge - Candela", f"{(ind_total - cand_total):,.0f}")
-                                    c4.metric("Tx Count", f"{len(tx):,}")
+                                    top_diag_cols = responsive_columns(self.responsive, desktop=4, tablet=2, phone=1)
+                                    top_diag_cols[0].metric("Candela Total", f"{cand_total:,.0f}")
+                                    top_diag_cols[1 % len(top_diag_cols)].metric("Indoge Total", f"{ind_total:,.0f}")
+                                    top_diag_cols[2 % len(top_diag_cols)].metric("Indoge - Candela", f"{(ind_total - cand_total):,.0f}")
+                                    top_diag_cols[3 % len(top_diag_cols)].metric("Tx Count", f"{len(tx):,}")
 
-                                    b1, b2, b3 = st.columns(3)
-                                    b1.metric("Missing raw order", f"{int(tx['missing_raw_order'].sum()):,}")
-                                    b2.metric("JSON parse failed", f"{int(tx['parse_failed'].sum()):,}")
-                                    b3.metric("Large mismatches (abs>1)", f"{int((tx['abs_diff'] > 1.0).sum()):,}")
+                                    diag_cols = responsive_columns(self.responsive, desktop=3, tablet=2, phone=1)
+                                    diag_cols[0].metric("Missing raw order", f"{int(tx['missing_raw_order'].sum()):,}")
+                                    diag_cols[1 % len(diag_cols)].metric("JSON parse failed", f"{int(tx['parse_failed'].sum()):,}")
+                                    diag_cols[2 % len(diag_cols)].metric("Large mismatches (abs>1)", f"{int((tx['abs_diff'] > 1.0).sum()):,}")
 
                                     top_n = int(st.number_input("Show top N mismatches", 5, 100, 15, 1, key="qr_diag_topn"))
                                     top = tx.sort_values("abs_diff", ascending=False).head(top_n).copy()
@@ -1404,8 +1410,13 @@ class QRCommissionTab:
             "width": width,
             "hide_index": hide_index
         }
-        if height is not None:
-            kwargs["height"] = height
+        kwargs["height"] = clamp_dataframe_height(
+            self.responsive,
+            desktop=height,
+            tablet=max(220, int((height or 420) * 0.82)),
+            phone=max(200, int((height or 420) * 0.68)),
+            kind="default" if height is None else "compact",
+        )
         if column_config is not None:
             kwargs["column_config"] = column_config
         st.dataframe(data, **kwargs)
