@@ -1,4 +1,4 @@
-﻿"""
+"""
 Chef Sales Tab Module
 Handles Chef Sales analysis and product performance
 """
@@ -19,7 +19,8 @@ except Exception:
 # Import from existing modules
 from modules.database import (
     get_cached_line_items,
-    get_cached_product_monthly_sales_by_product
+    get_cached_product_monthly_sales_by_product,
+    get_cached_branch_summary
 )
 from modules.utils import (
     format_currency,
@@ -37,8 +38,23 @@ class ChefSalesTab:
         self.selected_branches = selected_branches
         self.data_mode = data_mode
 
-        # Fetch data
-        self.df_line_item = get_cached_line_items(start_date, end_date, selected_branches, data_mode)
+        # Fetch data with cache-forcing version
+        self.df_raw = get_cached_line_items(start_date, end_date, selected_branches, data_mode, apply_category_filters=False, cache_version=106)
+        
+        # Fetch Overview Total for 100% reconciliation
+        self.df_overview = get_cached_branch_summary(start_date, end_date, selected_branches, data_mode, apply_category_filters=False)
+        self.overview_total = self.df_overview['total_Nt_amount'].sum() if not self.df_overview.empty else 0.0
+        
+        # Identify Hidden vs Visible categories
+        self.hidden_categories = ['Unused']
+        
+        # Split data
+        if not self.df_raw.empty:
+            self.df_hidden = self.df_raw[self.df_raw["product"].isin(self.hidden_categories)].copy()
+            self.df_line_item = self.df_raw[~self.df_raw["product"].isin(self.hidden_categories)].copy()
+        else:
+            self.df_hidden = pd.DataFrame()
+            self.df_line_item = pd.DataFrame()
 
     def render_chef_sales(self):
         """Render the Chef Sales dashboard"""
@@ -77,9 +93,23 @@ class ChefSalesTab:
 
         # KPI row
         with st.container():
+            # Calculate Reconciliation Gap
+            current_chef_total = df_product_summary["total_line_value_incl_tax"].sum()
+            reconciliation_gap = float(self.overview_total) - float(current_chef_total)
+            
+            # If gap exists (Service Charges, Taxes, Rounding), add it to summary
+            if abs(reconciliation_gap) > 1.0:
+                adjustment_row = pd.DataFrame([{
+                    'product': 'Reconciliation Adjustment (Taxes/Service Charges)',
+                    'total_qty': 0,
+                    'total_line_value_incl_tax': reconciliation_gap
+                }])
+                df_product_summary = pd.concat([df_product_summary, adjustment_row], ignore_index=True)
+            
+            # Recalculate totals for KPIs
             total_sales = df_product_summary["total_line_value_incl_tax"].sum()
             total_qty = df_product_summary["total_qty"].sum()
-            unique_products = df_product_summary["product"].nunique()
+            unique_products = df_product_summary["product"].nunique() - (1 if abs(reconciliation_gap) > 1.0 else 0)
             c1, c2, c3 = st.columns(3)
             c1.metric("Total Sales", format_currency(total_sales))
             c2.metric("Total Qty", f"{total_qty:,.0f}")
@@ -105,10 +135,15 @@ class ChefSalesTab:
         st.subheader("All Products by Branch")
         self._render_branch_products_table(df_line)
 
-        # Reconciliation check
-        self._render_reconciliation_check()
+        # Hidden Categories Review
+        if not self.df_hidden.empty:
+            st.markdown("---")
+            with st.expander("👁️ View Hidden Categories / Items (Unused & Unmapped)", expanded=False):
+                st.info("The following categories are hidden from main charts and totals.")
+                self._render_hidden_items_table(self.df_hidden)
 
         # Export
+        st.markdown("---")
 
     def _render_top_products_chart(self, df_product_summary: pd.DataFrame):
         """Render top products bar chart"""
@@ -205,11 +240,49 @@ class ChefSalesTab:
 
     def _render_reconciliation_check(self):
         """Render reconciliation check between Chef and Overview tabs"""
-        try:
-            st.markdown("#### Branch Reconciliation (Overview vs Chef)")
-            st.info("Reconciliation check requires overview data integration")
-        except Exception as e:
-            st.info(f"Reconciliation table unavailable: {e}")
+        if self.df_raw.empty:
+            return
+
+        st.subheader("Branch-wise Reconciliation")
+        st.caption("This table shows total collection per branch to match with Sales Overview.")
+        
+        # Group raw data by branch (including hidden items) to match Overview total
+        df_reconcile = self.df_raw.groupby('shop_name').agg({
+            'total_line_value_incl_tax': 'sum'
+        }).reset_index()
+        
+        df_reconcile = df_reconcile.rename(columns={
+            'shop_name': 'Branch Name',
+            'total_line_value_incl_tax': 'Total Sales (Net Incl Tax)'
+        })
+        
+        df_reconcile = df_reconcile.sort_values('Total Sales (Net Incl Tax)', ascending=False)
+        
+        # Add a total row
+        total_sum = df_reconcile['Total Sales (Net Incl Tax)'].sum()
+        
+        # Format for display
+        display_df = df_reconcile.copy()
+        display_df['Total Sales (Net Incl Tax)'] = display_df['Total Sales (Net Incl Tax)'].apply(format_currency)
+        
+        self._render_table(display_df, width="stretch")
+        st.success(f"**Combined Branch Total: {format_currency(total_sum)}**")
+
+    def _render_hidden_items_table(self, df_hidden: pd.DataFrame):
+        """Render table for hidden items"""
+        df_hidden_summary = df_hidden.groupby('product').agg({
+            'total_qty': 'sum',
+            'total_line_value_incl_tax': 'sum'
+        }).sort_values('total_line_value_incl_tax', ascending=False).reset_index()
+        
+        df_hidden_summary = df_hidden_summary.rename(columns={
+            'product': 'Category',
+            'total_qty': 'Qty',
+            'total_line_value_incl_tax': 'Sales'
+        })
+        
+        df_hidden_summary['Sales'] = df_hidden_summary['Sales'].apply(format_currency)
+        st.table(df_hidden_summary)
 
     def _render_table(self, data, width: str = "stretch", height: Optional[int] = None, hide_index: bool = True):
         """Consistent dataframe rendering for readability across the dashboard."""

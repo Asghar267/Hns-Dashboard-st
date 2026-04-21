@@ -73,7 +73,7 @@ class CategoryCoverageTab:
             # If no filters saved yet, default to all categories selected
             default_selection = current_include if current_include else category_options
 
-            # Single filter section - included categories only
+# Single filter section - included categories only
             with st.expander("🔍 Choose Categories", expanded=False):
                 st.caption("Select categories to include. All unselected categories are excluded automatically.")
                 actual_selected_count = len(current_include) if current_include else len(category_options)
@@ -82,28 +82,47 @@ class CategoryCoverageTab:
                 if unmapped_exists:
                     st.info(f"📦 + Unmapped products (not included in filter)")
 
-                btn_cols = responsive_columns(self.responsive, desktop=3, tablet=2, phone=1)
-                btn_col1 = btn_cols[0]
-                btn_col2 = btn_cols[1 % len(btn_cols)]
-                btn_col3 = btn_cols[2 % len(btn_cols)]
-                with btn_col1:
+                # Bulk action buttons
+                btn_cols = responsive_columns(self.responsive, desktop=2, tablet=2, phone=1)
+                with btn_cols[0]:
                     if st.button("✓ Select All", key=f"{self.key_prefix}_sel_all_cov", width="stretch"):
                         st.session_state[f"{self.key_prefix}_selected_cov"] = category_options.copy()
                         st.rerun()
-                with btn_col2:
-                    if st.button("✗ Clear All (Exclude All)", key=f"{self.key_prefix}_clear_all_cov", width="stretch"):
+                with btn_cols[1 % len(btn_cols)]:
+                    if st.button("✗ Clear All", key=f"{self.key_prefix}_clear_all_cov", width="stretch"):
                         st.session_state[f"{self.key_prefix}_selected_cov"] = []
                         st.rerun()
-                with btn_col3:
-                    st.write("")
 
-                selected_names = st.multiselect(
-                    "Choose categories to **INCLUDE** (unselected will be excluded)",
-                    options=category_options,
-                    default=default_selection,
-                    key=f"{self.key_prefix}_selected_cov",
-                    placeholder="Select categories..."
-                )
+                # Individual category checkboxes
+                st.markdown("**Mark categories to INCLUDE:**")
+                
+                # Initialize session state for toggle buttons if not exists
+                if f"{self.key_prefix}_cat_toggle_state" not in st.session_state:
+                    # Start with all selected
+                    st.session_state[f"{self.key_prefix}_cat_toggle_state"] = {cat: True for cat in category_options}
+                
+                # Create columns for checkbox layout (3 columns)
+                cat_cols = responsive_columns(self.responsive, desktop=3, tablet=2, phone=1)
+                
+                # Track which categories to include based on toggle state
+                included_cats = []
+                
+                for idx, cat in enumerate(category_options):
+                    col = cat_cols[idx % len(cat_cols)]
+                    with col:
+                        is_checked = st.session_state[f"{self.key_prefix}_cat_toggle_state"].get(cat, True)
+                        new_val = st.checkbox(
+                            cat,
+                            value=is_checked,
+                            key=f"{self.key_prefix}_chk_{cat}",
+                        )
+                        st.session_state[f"{self.key_prefix}_cat_toggle_state"][cat] = new_val
+                        if new_val:
+                            included_cats.append(cat)
+                
+                # Update the multiselect with included categories
+                selected_names = included_cats
+                st.session_state[f"{self.key_prefix}_selected_cov"] = included_cats
 
             # Handle session state
             if f"{self.key_prefix}_selected_cov" in st.session_state:
@@ -373,9 +392,10 @@ class CategoryCoverageTab:
                 out["Blocked Impact (PKR)"] = out["unfiltered_raw"] - out["blocked_only"]
                 out["Category Impact (PKR)"] = out["unfiltered_raw"] - out["category_only"]
                 out["Total Impact (PKR)"] = out["unfiltered_raw"] - out["blocked_plus_category"]
-                out["Total Impact (%)"] = (
-                    out["Total Impact (PKR)"] / out["unfiltered_raw"].replace(0, pd.NA) * 100.0
-                ).fillna(0.0).round(2)
+                # Avoid pd.NA here: replacing floats with pd.NA can force object dtype,
+                # and then `.round()` fails with "Expected numeric dtype, got object instead."
+                denom = out["unfiltered_raw"].where(out["unfiltered_raw"] != 0)
+                out["Total Impact (%)"] = (out["Total Impact (PKR)"] / denom * 100.0).fillna(0.0).round(2)
 
                 show = out.rename(
                     columns={

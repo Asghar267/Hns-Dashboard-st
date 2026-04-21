@@ -62,12 +62,20 @@ def delete_user(username: str) -> None:
 def initialize_credentials():
     """Initialize credentials file with default admin user"""
     os.makedirs("config", exist_ok=True)
+
+    # Require the initial admin password to be supplied from the environment.
+    # This avoids shipping a known default password in the repository.
+    default_admin_password = os.environ.get("HNS_DEFAULT_ADMIN_PASSWORD", "")
+    if not default_admin_password:
+        raise RuntimeError(
+            "Missing HNS_DEFAULT_ADMIN_PASSWORD. Set it once to bootstrap config/credentials.json safely."
+        )
     
     default_credentials = {
         "users": [
             {
                 "username": "Hnsadmin",
-                "password_hash": hash_password("root123"),
+                "password_hash": hash_password(default_admin_password),
                 "role": "admin",
                 "created_at": datetime.now().isoformat()
             }

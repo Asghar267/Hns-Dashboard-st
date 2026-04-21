@@ -16,6 +16,7 @@
 12. [Security Considerations](#12-security-considerations)
 13. [Performance Optimization](#13-performance-optimization)
 14. [Version History](#14-version-history)
+15. [Timezone Handling](#15-timezone-handling)
 
 ---
 
@@ -122,7 +123,7 @@ hns_dashboard.py
     │       └── modules/connection_cloud.py (Connection Pool)
     ├── modules/visualization.py (Charts)
     ├── modules/utils.py (Helpers)
-    └── config/credentials.json (User Data)
+    └── config/credentials.json (User Data, local-only)
 ```
 
 ### 2.4 Caching Strategy
@@ -188,20 +189,10 @@ sudo ACCEPT_EULA=Y apt-get install -y msodbcsql17 unixodbc-dev
 mkdir -p HNS_Deshboard/config
 ```
 
-2. **Create credentials file** (`config/credentials.json`):
-```json
-{
-  "users": [
-    {
-      "username": "admin",
-      "password_hash": "<sha256_hash>",
-      "role": "admin",
-      "allowed_branches": "all",
-      "created_at": "2024-01-01T00:00:00"
-    }
-  ]
-}
-```
+2. **Bootstrap credentials** (`config/credentials.json`, local-only):
+   - Set `HNS_DEFAULT_ADMIN_PASSWORD` in the environment
+   - Start the app; it will create `config/credentials.json` automatically on first run
+   - Use `config/credentials.example.json` as a safe reference for the expected shape
 
 3. **Generate password hash:**
 ```python
@@ -318,7 +309,7 @@ def hash_password(password: str) -> str:
 
 def initialize_credentials():
     """Initialize credentials file with default admin user"""
-    # Creates config/credentials.json with default admin
+    # Creates config/credentials.json using HNS_DEFAULT_ADMIN_PASSWORD (from environment)
 
 def verify_credentials(username: str, password: str) -> bool:
     """Verify username and password against stored hash"""
@@ -997,6 +988,24 @@ RAMZAN_DEALS_PRODUCT_IDS = [701, 703, 704, 705, 706, 707, 708, 709]
 - Grand totals row/column
 - Download pivot as CSV
 
+### 7.12 Tab 12: Shifts
+
+**Purpose:** Shift-wise sales analysis (Morning, Lunch, Dinner).
+
+**Components:**
+- Summary metric cards for total Morning, Lunch, and Dinner sales.
+- Shift distribution by branch bar chart.
+- Sales intensity heatmap (Shift vs Branch).
+- Detailed shift performance table with branch share percentages.
+
+**Shift Definitions (PKT):**
+- **Morning**: 06:00 AM – 12:00 PM
+- **Lunch**: 12:00 PM – 05:00 PM
+- **Dinner**: 05:00 PM – 06:00 AM (Next Day)
+
+**Timezone Adjustment:**
+Database timestamps are adjusted by +6 hours to convert from Greenland Standard Time (UTC-1) to Pakistani Time (UTC+5).
+
 ---
 
 ## 8. API Reference
@@ -1412,7 +1421,7 @@ SLOW_QUERY_THRESHOLD_SECONDS = 3.0  # Log slow queries above this
 
 ### 9.7 User Management
 
-Users are stored in `config/credentials.json`:
+Users are stored in `config/credentials.json` (local-only; not committed):
 
 ```json
 {
@@ -1599,7 +1608,7 @@ CREATE INDEX IX_tblSales_shop ON tblSales(shop_id);
 **Problem:** "Invalid username or password"
 
 **Solutions:**
-1. Verify credentials file exists at `config/credentials.json`
+1. Verify `HNS_DEFAULT_ADMIN_PASSWORD` is set (for first-run bootstrap) and that `config/credentials.json` exists
 2. Regenerate password hash
 3. Check JSON format is valid
 

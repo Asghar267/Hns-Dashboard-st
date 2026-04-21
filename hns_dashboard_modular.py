@@ -31,22 +31,25 @@ except Exception:
     _notify = None
 
 from dashboard_tabs.category_coverage_tab import CategoryCoverageTab
+from dashboard_tabs.call_center_tab import CallCenterTab
 from dashboard_tabs.chef_sales_tab import ChefSalesTab
 from dashboard_tabs.chef_targets_tab import ChefTargetsTab
 from dashboard_tabs.database_health_tab import DatabaseHealthDiagnosticsTab
-from dashboard_tabs.food_panda_tab import FoodPandaTab
+from dashboard_tabs.fresh_pick_tab import FreshPickTab
+from dashboard_tabs.food_panda_tab import FoodPandaTab, render_foodpanda_difference_report_tab
 from dashboard_tabs.material_cost_commission_tab import MaterialCostCommissionTab
 from dashboard_tabs.order_takers_tab import OrderTakersTab
 from dashboard_tabs.overview_tab import OverviewTab
 from dashboard_tabs.ot_targets_tab import OTTargetsTab
 from dashboard_tabs.pivot_tables_tab import PivotTablesTab
+from dashboard_tabs.product_pnl_tab import ProductPNLTab
 from dashboard_tabs.ramzan_deals_tab import RamzanDealsTab
-from dashboard_tabs.web_items_export_tab import WebItemsExportTab
 try:
     from dashboard_tabs.trends_analytics_tab import TrendsAnalyticsTab
 except Exception as _trends_import_err:
     TrendsAnalyticsTab = None
     _TRENDS_IMPORT_ERROR = _trends_import_err
+from dashboard_tabs.shift_analysis_tab import ShiftAnalysisTab
 from modules.auth import (
     authenticate_user,
     check_session_timeout,
@@ -82,6 +85,8 @@ from modules.responsive import (
     render_layout_mode_control,
     responsive_columns,
 )
+from components.snapshot_downloader import trigger_bulk_download, render_gallery_item
+from components.pdf_generator import render_pdf_download_button
 
 
 EXCLUDED_EMPLOYEE_NAMES = {"online/unassigned"}
@@ -341,6 +346,8 @@ SNAPSHOT_SETTINGS_DEFAULTS: Dict[str, bool] = {
     "khadda_diagnostics": True,
 }
 
+TAB_VISIBILITY_SETTINGS_PATH = Path("config") / "tab_visibility_settings.json"
+
 
 def load_snapshot_settings() -> Dict[str, bool]:
     try:
@@ -367,6 +374,46 @@ def save_snapshot_settings(settings: Dict[str, Any]) -> None:
     tmp.replace(SNAPSHOT_SETTINGS_PATH)
 
 
+def _default_tab_visibility() -> Dict[str, bool]:
+    tabs = app_config.AppConfig.NAVBAR_ITEMS.get("tabs", {})
+    return {str(label): True for label in tabs.keys()}
+
+
+def load_tab_visibility_settings() -> Dict[str, bool]:
+    defaults = _default_tab_visibility()
+    try:
+        if TAB_VISIBILITY_SETTINGS_PATH.exists():
+            data = json.loads(TAB_VISIBILITY_SETTINGS_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                for key in defaults.keys():
+                    if key in data:
+                        defaults[key] = bool(data[key])
+    except Exception:
+        pass
+
+    # Prevent locking out admin controls from the UI.
+    if "Admin & Snapshots" in defaults:
+        defaults["Admin & Snapshots"] = True
+    return defaults
+
+
+def save_tab_visibility_settings(settings: Dict[str, Any]) -> None:
+    data = _default_tab_visibility()
+    if isinstance(settings, dict):
+        for key in data.keys():
+            if key in settings:
+                data[key] = bool(settings[key])
+
+    # Prevent locking out admin controls from the UI.
+    if "Admin & Snapshots" in data:
+        data["Admin & Snapshots"] = True
+
+    TAB_VISIBILITY_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = TAB_VISIBILITY_SETTINGS_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(TAB_VISIBILITY_SETTINGS_PATH)
+
+
 def render_user_management_tab(branch_name_map: dict) -> None:
     responsive = get_responsive_context()
     st.header("Admin & Snapshots")
@@ -388,12 +435,8 @@ def render_user_management_tab(branch_name_map: dict) -> None:
             else:
                 st.info("No users found yet.")
 
-        tab_options = [
-            "Overview", "Order Takers", "Chef Sales", "Chef Targets", "Food Panda", "OT Targets",
-            "QR Commission", "Khadda Diagnostics", "Database Health Diagnostics", "Material Cost Commission",
-            "Trends & Analytics", "Ramzan Deals", "Category Filters & Coverage", "Pivot Tables",
-            "Admin & Snapshots",
-        ]
+        # Auto-derive from app_config so new tabs are always visible here
+        tab_options = list(app_config.AppConfig.NAVBAR_ITEMS.get("tabs", {}).keys())
         qr_table_options = [
             "Split Report", "Detailed Transactions", "Employee Totals",
             "Employee Totals (No Sales/Candelahns)",
@@ -549,6 +592,45 @@ def render_user_management_tab(branch_name_map: dict) -> None:
                 ts = datetime.fromtimestamp(SNAPSHOT_SETTINGS_PATH.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
                 st.caption(f"Last saved: {ts}")
 
+            st.markdown("---")
+            st.markdown("**Global Tab Visibility**")
+            st.caption("Disable tabs completely from navbar for all users.")
+
+            tab_visibility = load_tab_visibility_settings()
+            tab_items = list(app_config.AppConfig.NAVBAR_ITEMS.get("tabs", {}).keys())
+            user_tab_items = [t for t in tab_items if t != "Admin & Snapshots"]
+
+            vis_btn1, vis_btn2 = responsive_columns(responsive, desktop=2, tablet=2, phone=1)
+            with vis_btn1:
+                if st.button("Enable All Tabs", width="stretch", key="tabs_enable_all"):
+                    new_vis = {k: True for k in tab_items}
+                    save_tab_visibility_settings(new_vis)
+                    st.success("All tabs enabled.")
+                    st.rerun()
+            with vis_btn2:
+                if st.button("Disable All User Tabs", width="stretch", key="tabs_disable_all_user"):
+                    new_vis = {k: (k == "Admin & Snapshots") for k in tab_items}
+                    save_tab_visibility_settings(new_vis)
+                    st.success("All user tabs disabled (Admin & Snapshots kept enabled).")
+                    st.rerun()
+
+            with st.form("tab_visibility_settings_form", clear_on_submit=False):
+                new_tab_visibility: Dict[str, bool] = {}
+                for label in user_tab_items:
+                    new_tab_visibility[label] = st.checkbox(
+                        label,
+                        value=bool(tab_visibility.get(label, True)),
+                        key=f"tab_visible_{label}",
+                    )
+                save_tabs = st.form_submit_button("Save Tab Visibility", width="stretch")
+                if save_tabs:
+                    save_tab_visibility_settings(new_tab_visibility)
+                    st.success("Tab visibility settings saved.")
+
+            if TAB_VISIBILITY_SETTINGS_PATH.exists():
+                tab_ts = datetime.fromtimestamp(TAB_VISIBILITY_SETTINGS_PATH.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                st.caption(f"Tab visibility last saved: {tab_ts}")
+
         with right:
             st.markdown("**Snapshot Viewer**")
             base_dir = Path("HNS_Deshboard") / "snapshots"
@@ -608,34 +690,104 @@ def render_user_management_tab(branch_name_map: dict) -> None:
                 pass
 
             name_filter = st.text_input("Filter files", value="", placeholder="Type to filter by filename…")
-            files = [p for p in browse_dir.iterdir() if p.is_file() and p.suffix.lower() in {".png", ".csv", ".json"}]
-            files = sorted(files, key=lambda p: p.name)
+            all_images = [p for p in browse_dir.iterdir() if p.is_file() and p.suffix.lower() == ".png"]
+            all_files = [p for p in browse_dir.iterdir() if p.is_file() and p.suffix.lower() in {".png", ".csv", ".json"}]
+            all_files = sorted(all_files, key=lambda p: p.name)
+            
             if name_filter.strip():
                 nf = name_filter.strip().lower()
-                files = [p for p in files if nf in p.name.lower()]
+                all_files = [p for p in all_files if nf in p.name.lower()]
+                all_images = [p for p in all_images if nf in p.name.lower()]
 
-            if not files:
+            if not all_files:
                 st.info("No files found for this section/filter.")
                 return
 
-            chosen = st.selectbox("File", files, format_func=lambda p: p.name)
-            st.caption(f"Selected: {chosen.name}")
-            if chosen.suffix.lower() == ".png":
-                st.image(str(chosen), use_container_width=True)
-                st.download_button("Download PNG", data=chosen.read_bytes(), file_name=chosen.name, mime="image/png")
-            elif chosen.suffix.lower() == ".csv":
-                try:
-                    df = pd.read_csv(chosen)
-                    st.dataframe(df, width="stretch", hide_index=True, height=clamp_dataframe_height(responsive, desktop=520, tablet=400, phone=300, kind="tall"))
-                except Exception as e:
-                    st.error(f"Could not read CSV: {e}")
-                st.download_button("Download CSV", data=chosen.read_bytes(), file_name=chosen.name, mime="text/csv")
-            elif chosen.suffix.lower() == ".json":
-                try:
-                    st.json(json.loads(chosen.read_text(encoding="utf-8")))
-                except Exception as e:
-                    st.error(f"Could not read JSON: {e}")
-                st.download_button("Download JSON", data=chosen.read_bytes(), file_name=chosen.name, mime="application/json")
+            # Gallery Header with Controls
+            gal_col1, gal_col2, gal_col3 = st.columns([2, 1, 1])
+            with gal_col1:
+                st.subheader("Snapshot Viewer")
+            with gal_col2:
+                show_slideshow = st.toggle("📺 Slideshow Mode", key="toggle_slideshow")
+            with gal_col3:
+                if all_images:
+                    if st.button("🚀 Download All PNGs", use_container_width=True, help="Automatically download all filtered images to your local device."):
+                        files_to_dl = []
+                        for img_p in all_images:
+                            with open(img_p, "rb") as f:
+                                files_to_dl.append({'name': img_p.name, 'data': f.read()})
+                        trigger_bulk_download(files_to_dl)
+                        st.success(f"Triggered download for {len(files_to_dl)} images.")
+
+            if all_images:
+                # Add PDF Export button in a full-width row or below headers
+                render_pdf_download_button(all_images, f"HNS_Report_{selected_folder.name}_{selected_section}")
+
+            if show_slideshow and all_images:
+                # Simple Session-State based Slideshow
+                if "ss_index" not in st.session_state:
+                    st.session_state.ss_index = 0
+                
+                # Bounds check
+                if st.session_state.ss_index >= len(all_images):
+                    st.session_state.ss_index = 0
+                
+                current_img = all_images[st.session_state.ss_index]
+                
+                # Slideshow Controls
+                ss_prev, ss_info, ss_next = st.columns([1, 2, 1])
+                with ss_prev:
+                    if st.button("⬅️ Previous", use_container_width=True):
+                        st.session_state.ss_index = (st.session_state.ss_index - 1) % len(all_images)
+                        st.rerun()
+                with ss_info:
+                    st.markdown(f"<p style='text-align: center; font-weight: bold;'>{st.session_state.ss_index + 1} / {len(all_images)}<br><small>{current_img.name}</small></p>", unsafe_allow_html=True)
+                with ss_next:
+                    if st.button("Next ➡️", use_container_width=True):
+                        st.session_state.ss_index = (st.session_state.ss_index + 1) % len(all_images)
+                        st.rerun()
+
+                # Swipe support hint via HTML/JS
+                st.components.v1.html(f"""
+                    <script>
+                    const doc = window.parent.document;
+                    doc.addEventListener('keydown', (e) => {{
+                        if (e.key === 'ArrowLeft') window.parent.location.reload(); // Simplified trigger for demo
+                        if (e.key === 'ArrowRight') window.parent.location.reload();
+                    }});
+                    </script>
+                """, height=0)
+
+                st.image(str(current_img), use_container_width=True)
+                st.download_button("Download This Image", data=current_img.read_bytes(), file_name=current_img.name, mime="image/png", use_container_width=True)
+            
+            elif all_images:
+                # Display images in a grid (Gallery Mode)
+                cols_count = 3 if responsive.is_desktop else 2 if responsive.is_tablet else 1
+                gal_cols = st.columns(cols_count)
+                for i, img_p in enumerate(all_images):
+                    with gal_cols[i % cols_count]:
+                        render_gallery_item(img_p, img_p.name)
+
+            # Non-image files (CSVs, JSONs) stay in a selectbox or list
+            other_files = [p for p in all_files if p.suffix.lower() != ".png"]
+            if other_files:
+                st.markdown("---")
+                st.subheader("Data Files (CSV/JSON)")
+                chosen = st.selectbox("Select Data File", other_files, format_func=lambda p: p.name)
+                if chosen.suffix.lower() == ".csv":
+                    try:
+                        df = pd.read_csv(chosen)
+                        st.dataframe(df, width="stretch", hide_index=True, height=clamp_dataframe_height(responsive, desktop=520, tablet=400, phone=300, kind="tall"))
+                    except Exception as e:
+                        st.error(f"Could not read CSV: {e}")
+                    st.download_button("Download CSV", data=chosen.read_bytes(), file_name=chosen.name, mime="text/csv")
+                elif chosen.suffix.lower() == ".json":
+                    try:
+                        st.json(json.loads(chosen.read_text(encoding="utf-8")))
+                    except Exception as e:
+                        st.error(f"Could not read JSON: {e}")
+                    st.download_button("Download JSON", data=chosen.read_bytes(), file_name=chosen.name, mime="application/json")
 
 
 def main() -> None:
@@ -686,7 +838,21 @@ def main() -> None:
     user_record = st.session_state.get("user", {}) or {}
     role = str(user_record.get("role", "user")).lower()
 
-    navbar_config = app_config.AppConfig.NAVBAR_ITEMS
+    base_navbar = app_config.AppConfig.NAVBAR_ITEMS
+    tab_visibility = load_tab_visibility_settings()
+    visible_tabs = {
+        label: info
+        for label, info in base_navbar.get("tabs", {}).items()
+        if bool(tab_visibility.get(label, True))
+    }
+    # Prevent admin lockout.
+    if "Admin & Snapshots" in base_navbar.get("tabs", {}) and "Admin & Snapshots" not in visible_tabs:
+        visible_tabs["Admin & Snapshots"] = base_navbar["tabs"]["Admin & Snapshots"]
+
+    navbar_config = {
+        "tabs": visible_tabs,
+        "globals": base_navbar.get("globals", []),
+    }
 
     st.sidebar.title("Dashboard Controls")
     render_layout_mode_control(st.sidebar)
@@ -1034,6 +1200,9 @@ def main() -> None:
     def _render_overview():
         OverviewTab(start_date_str, end_date_str, selected_branches, data_mode).render_overview()
 
+    def _render_call_center():
+        CallCenterTab(start_date_str, end_date_str, selected_branches, data_mode).render()
+
     def _render_order_takers():
         OrderTakersTab(start_date_str, end_date_str, selected_branches, data_mode).render_order_takers()
 
@@ -1043,8 +1212,26 @@ def main() -> None:
     def _render_chef_targets():
         ChefTargetsTab(target_year, target_month, start_date_str, end_date_str, selected_branches, data_mode).render()
 
+    def _render_fresh_pick():
+        FreshPickTab(target_year, target_month, start_date_str, end_date_str, selected_branches, data_mode).render()
+
+    def _render_fp_final_difference():
+        # Ensure selected_branches is hashable
+        branches = selected_branches
+        if hasattr(branches, "tolist"):
+            branches = branches.tolist()
+        elif not isinstance(branches, (list, tuple)):
+            branches = list(branches) if branches is not None else []
+        render_foodpanda_difference_report_tab(start_date_str, end_date_str, list(branches), data_mode)
+
     def _render_food_panda():
-        FoodPandaTab(start_date_str, end_date_str, selected_branches, data_mode).render()
+        # Ensure selected_branches is a list or tuple for caching consistency
+        branches = selected_branches
+        if hasattr(branches, "tolist"):
+            branches = branches.tolist()
+        elif not isinstance(branches, (list, tuple)):
+            branches = list(branches) if branches is not None else []
+        FoodPandaTab(start_date_str, end_date_str, list(branches), data_mode).render()
 
     def _render_ot_targets():
         OTTargetsTab(target_year, target_month, start_date_str, end_date_str, selected_branches, data_mode).render()
@@ -1058,11 +1245,11 @@ def main() -> None:
     def _render_material_cost():
         MaterialCostCommissionTab(start_date_str, end_date_str, selected_branches, data_mode).render()
 
+    def _render_product_pnl():
+        ProductPNLTab(start_date_str, end_date_str, selected_branches, data_mode).render()
+
     def _render_database_health_diagnostics():
         DatabaseHealthDiagnosticsTab(start_date_str, end_date_str, selected_branches, data_mode).render()
-
-    def _render_web_items_export():
-        WebItemsExportTab().render()
 
     def _render_trends_analytics():
         if TrendsAnalyticsTab is None:
@@ -1088,6 +1275,9 @@ def main() -> None:
     def _render_pivot_tables():
         PivotTablesTab(start_date_str, end_date_str, selected_branches, data_mode, df_line_item).render()
 
+    def _render_shift_analysis():
+        ShiftAnalysisTab(start_date_str, end_date_str, selected_branches, data_mode).render()
+
     def _render_user_management():
         current_user = st.session_state.get("user", {}) or {}
         current_role = str(current_user.get("role", "user")).lower()
@@ -1099,20 +1289,24 @@ def main() -> None:
 
     tab_map = {
         'overview': _render_overview,
+        'call_center': _render_call_center,
         'order_takers': _render_order_takers,
         'chef_sales': _render_chef_sales,
         'chef_targets': _render_chef_targets,
+        'fresh_pick': _render_fresh_pick,
+        'fp_final_difference': _render_fp_final_difference,
         'food_panda': _render_food_panda,
         'ot_targets': _render_ot_targets,
         'qr_commission': _render_qr_commission,
         'khadda_diagnostics': _render_khadda_diagnostics,
         'database_health_diagnostics': _render_database_health_diagnostics,
-        'web_items_export': _render_web_items_export,
         'material_cost_commission': _render_material_cost,
+        'product_pnl': _render_product_pnl,
         'trends_analytics': _render_trends_analytics,
         'ramzan_deals': _render_ramzan_deals,
         'category_filters_&_coverage': _render_category_coverage,
         'pivot_tables': _render_pivot_tables,
+        'shifts': _render_shift_analysis,
     }
     # Support legacy/double-underscore key from navbar normalization
     tab_map.setdefault('trends__analytics', _render_trends_analytics)

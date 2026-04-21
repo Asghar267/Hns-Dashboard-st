@@ -69,7 +69,7 @@ class TargetService:
             
             # Get sales data for this branch
             df_sales_this_branch = df_line_item[df_line_item['shop_id'] == shop_id].copy()
-            products_to_hide = ['Sales - Employee Food', 'Deals', 'Modifiers']
+            products_to_hide = ['Sales - Employee Food', 'Modifiers']
             df_sales_this_branch = df_sales_this_branch[~df_sales_this_branch['product'].isin(products_to_hide)]
             
             # Clean names for merging
@@ -84,6 +84,8 @@ class TargetService:
                     if word == 'ROLLS': word = 'ROLL'
                     elif word == 'ORDERS': word = 'ORDER'
                     elif word == 'SIDES': word = 'SIDE'
+                    elif word == 'DEALS': word = 'DEAL'
+                    elif word == 'NASHTA': word = 'BREAKFAST'
                     cleaned_words.append(word)
                 return ' '.join(cleaned_words)
             
@@ -111,6 +113,8 @@ class TargetService:
             df_res['Target'] = pd.to_numeric(df_res['Target'], errors='coerce').fillna(0)
             df_res['Current Sale'] = pd.to_numeric(df_res['Current Sale'], errors='coerce').fillna(0)
             
+            num_days = monthrange(target_year, target_month)[1]
+            df_res['Daily Target'] = df_res['Target'] / num_days
             df_res['Remaining'] = df_res['Target'] - df_res['Current Sale']
             df_res['Achievement %'] = df_res.apply(
                 lambda row: (row['Current Sale'] / row['Target'] * 100) if row['Target'] > 0 else 0,
@@ -121,7 +125,7 @@ class TargetService:
                 axis=1
             )
             
-            return df_res[['Product', 'Target', 'Type', 'Current Sale', 'Remaining', 'Achievement %', 'Bonus']]
+            return df_res[['Product', 'Target', 'Daily Target', 'Type', 'Current Sale', 'Remaining', 'Achievement %', 'Bonus']]
             
         except Exception as e:
             print(f"Error in get_chef_targets_analysis: {e}")

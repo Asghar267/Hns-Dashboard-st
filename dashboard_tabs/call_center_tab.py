@@ -37,7 +37,10 @@ class CallCenterTab:
         server = os.environ.get("CALL_CENTER_DB_SERVER", "103.86.55.34,50908")
         database = os.environ.get("CALL_CENTER_DB_NAME", "HNSYGCC")
         uid = os.environ.get("CALL_CENTER_DB_UID", "sa")
-        pwd = os.environ.get("CALL_CENTER_DB_PWD", "123")
+        # Never hardcode passwords in the repo. Use environment variables for secrets.
+        pwd = os.environ.get("CALL_CENTER_DB_PWD", "")
+        if not pwd:
+            raise RuntimeError("Missing CALL_CENTER_DB_PWD environment variable for HNSYGCC connection.")
         timeout = int(os.environ.get("CALL_CENTER_DB_TIMEOUT", "30"))
 
         return (

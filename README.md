@@ -38,7 +38,8 @@ HNS_Deshboard/
 ├── hns_dashboard.py          # Main dashboard application
 ├── sqldatabase.py           # Legacy database functions (preserved)
 ├── config/                  # Configuration files
-│   ├── credentials.json     # Database credentials
+│   ├── credentials.json     # App users (local-only; not committed)
+│   ├── credentials.example.json  # Template only (safe to commit)
 │   └── config.py           # Application configuration
 ├── modules/                 # Modular components
 │   ├── connection_cloud.py # Enhanced connection management
@@ -83,9 +84,9 @@ HNS_Deshboard/
 ### Setup
 
 1. **Clone or download** the dashboard files to your local machine
-2. **Configure Database Credentials**:
-   - Edit `config/credentials.json` with your database connection details
-   - Ensure proper network access to SQL Server instances
+2. **Configure Credentials & Databases**:
+   - App login users live in `config/credentials.json` (local-only). If it doesn't exist, the app bootstraps it using `HNS_DEFAULT_ADMIN_PASSWORD`.
+   - Database connectivity is configured via environment variables (see `config/app_config.py` and `modules/connection_cloud.py`).
 
 3. **Run the Dashboard**:
    ```bash
@@ -97,26 +98,12 @@ HNS_Deshboard/
 
 ### Database Configuration
 
-Edit `config/credentials.json`:
+Set environment variables (examples):
 
-```json
-{
-  "candelahns": {
-    "server": "your_server_name",
-    "database": "Candelahns",
-    "username": "your_username",
-    "password": "your_password",
-    "driver": "{ODBC Driver 17 for SQL Server}"
-  },
-  "kdsdb": {
-    "server": "your_server_name",
-    "database": "KDS_DB",
-    "username": "your_username",
-    "password": "your_password",
-    "driver": "{ODBC Driver 17 for SQL Server}"
-  }
-}
-```
+- `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD` (see `config/app_config.py`)
+- `KDSDB_SERVER`, `KDSDB_DATABASE`, `KDSDB_AUTH`, `KDSDB_UID`, `KDSDB_PWD` (see `modules/connection_cloud.py`)
+- `CANDELAHNS_PWD` (see `modules/connection_cloud.py`)
+- `CALL_CENTER_DB_SERVER`, `CALL_CENTER_DB_NAME`, `CALL_CENTER_DB_UID`, `CALL_CENTER_DB_PWD` (see `dashboard_tabs/call_center_tab.py`)
 
 ### Connection Settings
 
@@ -195,7 +182,7 @@ The dashboard includes built-in performance monitoring:
 
 1. **Connection Timeouts**:
    - Check network connectivity to SQL Server
-   - Verify database credentials in `config/credentials.json`
+   - Verify database environment variables (e.g. `DB_PASSWORD`, `KDSDB_PWD`, `CANDELAHNS_PWD`, `CALL_CENTER_DB_PWD`)
    - Increase `CONNECTION_TIMEOUT` in `modules/config.py`
 
 2. **Slow Performance**:
@@ -220,8 +207,8 @@ The dashboard includes several recovery mechanisms:
 ## Security
 
 ### Credential Management
-- Database credentials are stored in encrypted JSON files
-- Credentials are loaded at runtime and not exposed in logs
+- App login users are stored in `config/credentials.json` (local-only; not committed)
+- Database credentials are supplied via environment variables and should not be hardcoded
 - Connection strings are properly formatted and secured
 
 ### Access Control

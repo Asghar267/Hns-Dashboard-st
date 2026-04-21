@@ -40,7 +40,7 @@ class BranchService:
         if festival_mask.any() and festival2_mask.any():
             festival2_sales = df_branch_display.loc[festival2_mask, 'total_Nt_amount'].sum()
             df_branch_display.loc[festival_mask, 'total_Nt_amount'] += festival2_sales
-            df_branch_display.loc[festival_mask, 'shop_name'] = "FESTIVAL"
+            df_branch_display.loc[festival_mask, 'shop_name'] = "FESTIVAL 1 & FESTIVAL 2"
             df_branch_display = df_branch_display.loc[~festival2_mask].copy()
             
         # Calculate derived metrics

@@ -1,0 +1,485 @@
+[
+  {
+    "product_code": 289,
+    "product_name": "BBQ Sauce Dip",
+    "material_cost": 19.3,
+    "commission": 60.0,
+    "active": false
+  },
+  {
+    "product_code": 137,
+    "product_name": "Banana Shake",
+    "material_cost": 175.0,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 11,
+    "product_name": "Beef Behari Cheese Roll",
+    "material_cost": 253.4,
+    "commission": 10.0,
+    "active": false
+  },
+  {
+    "product_code": 235,
+    "product_name": "Buffalo Wings",
+    "material_cost": 596.9,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 960,
+    "product_name": "Chadder Broast ( Breast )",
+    "material_cost": 475.1,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 959,
+    "product_name": "Chadder Broast ( Leg )",
+    "material_cost": 470.1,
+    "commission": 70.0,
+    "active": false
+  },
+  {
+    "product_code": 555,
+    "product_name": "Channa Tarkari",
+    "material_cost": 53.9,
+    "commission": 20.0,
+    "active": false
+  },
+  {
+    "product_code": 260,
+    "product_name": "Chatni Bowl",
+    "material_cost": 178.2,
+    "commission": 20.0,
+    "active": false
+  },
+  {
+    "product_code": 87,
+    "product_name": "Cheese Sauce Dip",
+    "material_cost": 39.1,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 91,
+    "product_name": "Cheese Slice",
+    "material_cost": 25.0,
+    "commission": 15.0,
+    "active": false
+  },
+  {
+    "product_code": 136,
+    "product_name": "Chekoo Shake",
+    "material_cost": 120.5,
+    "commission": 70.0,
+    "active": false
+  },
+  {
+    "product_code": 17,
+    "product_name": "Chicken Behari Cheese Roll",
+    "material_cost": 159.7,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 36,
+    "product_name": "Chicken Behari Kabab",
+    "material_cost": 300.8,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 20,
+    "product_name": "Chicken Crispy Cheese Roll",
+    "material_cost": 199.8,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 40,
+    "product_name": "Chicken Masala Boti",
+    "material_cost": 317.1,
+    "commission": 100.0,
+    "active": false
+  },
+  {
+    "product_code": 60,
+    "product_name": "Chicken Pineapple Salad",
+    "material_cost": 512.5,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 14,
+    "product_name": "Chicken Reshmi Kabab Cheese Roll",
+    "material_cost": 135.9,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 13,
+    "product_name": "Chicken Reshmi Kabab Garlic Roll",
+    "material_cost": 147.6,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 68,
+    "product_name": "Chicken Supreme Burger",
+    "material_cost": 421.2,
+    "commission": 70.0,
+    "active": false
+  },
+  {
+    "product_code": 201,
+    "product_name": "Chicken Tikka Wash ( Breast)",
+    "material_cost": 214.8,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 203,
+    "product_name": "Chicken Tikka Wash Leg",
+    "material_cost": 214.9,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 135,
+    "product_name": "Date Shake",
+    "material_cost": 155.9,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 162,
+    "product_name": "Disposable Glass with Ice",
+    "material_cost": 21.7,
+    "commission": 10.0,
+    "active": false
+  },
+  {
+    "product_code": 227,
+    "product_name": "Fish Crackers Basket",
+    "material_cost": 58.7,
+    "commission": 10.0,
+    "active": false
+  },
+  {
+    "product_code": 61,
+    "product_name": "Fruit Salad",
+    "material_cost": 449.1,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 270,
+    "product_name": "Fusion Platter (1)",
+    "material_cost": 0.0,
+    "commission": 50.0,
+    "active": true
+  },
+  {
+    "product_code": 272,
+    "product_name": "Fusion Platter (2)",
+    "material_cost": 0.0,
+    "commission": 50.0,
+    "active": true
+  },
+  {
+    "product_code": 271,
+    "product_name": "Fusion Platter (3)",
+    "material_cost": 849.9,
+    "commission": 80.0,
+    "active": true
+  },
+  {
+    "product_code": 957,
+    "product_name": "Garlic Mayo Broast ( Breast ) Topping",
+    "material_cost": 509.2,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 953,
+    "product_name": "Garlic Mayo Broast ( Leg ) Topping",
+    "material_cost": 439.2,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 955,
+    "product_name": "Garlic Mayo Fries Topping",
+    "material_cost": 255.4,
+    "commission": 30.0,
+    "active": false
+  },
+  {
+    "product_code": 79,
+    "product_name": "Golden Nuggets (10 Pcs)",
+    "material_cost": 299.6,
+    "commission": 100.0,
+    "active": false
+  },
+  {
+    "product_code": 127,
+    "product_name": "Grape Fruit",
+    "material_cost": 233.8,
+    "commission": 10.0,
+    "active": false
+  },
+  {
+    "product_code": 803,
+    "product_name": "Green Masala Chicken",
+    "material_cost": 309.1,
+    "commission": 30.0,
+    "active": false
+  },
+  {
+    "product_code": 66,
+    "product_name": "Grilled Breast Burger",
+    "material_cost": 336.2,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 90,
+    "product_name": "Hot Dog Bun",
+    "material_cost": 32.0,
+    "commission": 5.0,
+    "active": false
+  },
+  {
+    "product_code": 701,
+    "product_name": "Iftar Deal 1 ( Serve 2)",
+    "material_cost": 1689.0,
+    "commission": 100.0,
+    "active": false
+  },
+  {
+    "product_code": 703,
+    "product_name": "Iftar Deal 2 (Serve3)",
+    "material_cost": 2717.0,
+    "commission": 100.0,
+    "active": false
+  },
+  {
+    "product_code": 704,
+    "product_name": "Iftar Deal 3 ( Serve 4)",
+    "material_cost": 3218.0,
+    "commission": 100.0,
+    "active": false
+  },
+  {
+    "product_code": 705,
+    "product_name": "Iftar Deal 4 ( Serve 5)",
+    "material_cost": 2774.0,
+    "commission": 100.0,
+    "active": false
+  },
+  {
+    "product_code": 166,
+    "product_name": "Kheer",
+    "material_cost": 170.3,
+    "commission": 10.0,
+    "active": false
+  },
+  {
+    "product_code": 255,
+    "product_name": "Kunafa",
+    "material_cost": 343.6,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 230,
+    "product_name": "Mix Vegetable Handi",
+    "material_cost": 338.2,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 231,
+    "product_name": "Mix Vegetable Pulao",
+    "material_cost": 197.0,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 106,
+    "product_name": "Mutton Biryani",
+    "material_cost": 979.0,
+    "commission": 150.0,
+    "active": false
+  },
+  {
+    "product_code": 129,
+    "product_name": "Orange Juice",
+    "material_cost": 173.0,
+    "commission": 15.0,
+    "active": false
+  },
+  {
+    "product_code": 140,
+    "product_name": "Oreo Shake",
+    "material_cost": 340.6,
+    "commission": 20.0,
+    "active": false
+  },
+  {
+    "product_code": 103,
+    "product_name": "Palak Paneer Handi",
+    "material_cost": 539.4,
+    "commission": 100.0,
+    "active": false
+  },
+  {
+    "product_code": 566,
+    "product_name": "Palak Paneer Nashta",
+    "material_cost": 183.93,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 232,
+    "product_name": "Paneer Makhni Handi",
+    "material_cost": 810.3,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 233,
+    "product_name": "Paneer Vegetable Karahi",
+    "material_cost": 440.9,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 234,
+    "product_name": "Peri Bite",
+    "material_cost": 394.5,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 198,
+    "product_name": "Peshawari Chicken Karahi",
+    "material_cost": 430.1,
+    "commission": 100.0,
+    "active": false
+  },
+  {
+    "product_code": 199,
+    "product_name": "Peshawari Mutton Karahi",
+    "material_cost": 1276.9,
+    "commission": 100.0,
+    "active": false
+  },
+  {
+    "product_code": 131,
+    "product_name": "Pineapple Shake",
+    "material_cost": 192.2,
+    "commission": 10.0,
+    "active": false
+  },
+  {
+    "product_code": 109,
+    "product_name": "Plain Rice",
+    "material_cost": 102.0,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 101,
+    "product_name": "Red Handi",
+    "material_cost": 396.0,
+    "commission": 150.0,
+    "active": false
+  },
+  {
+    "product_code": 706,
+    "product_name": "SEHRI DEAL 1 (SERVE 2)",
+    "material_cost": 1156.0,
+    "commission": 100.0,
+    "active": false
+  },
+  {
+    "product_code": 707,
+    "product_name": "SEHRI DEAL 2 SERVE 3",
+    "material_cost": 2056.0,
+    "commission": 100.0,
+    "active": false
+  },
+  {
+    "product_code": 708,
+    "product_name": "SEHRI DEAL 3 SERVE 4",
+    "material_cost": 1679.0,
+    "commission": 100.0,
+    "active": false
+  },
+  {
+    "product_code": 709,
+    "product_name": "SEHRI DEAL 4 SERVE 5",
+    "material_cost": 2706.0,
+    "commission": 100.0,
+    "active": false
+  },
+  {
+    "product_code": 26,
+    "product_name": "Seekh Kabab Cheese Roll",
+    "material_cost": 158.8,
+    "commission": 30.0,
+    "active": false
+  },
+  {
+    "product_code": 25,
+    "product_name": "Seekh Kabab Garlic Mayo Roll",
+    "material_cost": 170.5,
+    "commission": 30.0,
+    "active": false
+  },
+  {
+    "product_code": 94,
+    "product_name": "Special Chicken Karahi",
+    "material_cost": 480.0,
+    "commission": 100.0,
+    "active": false
+  },
+  {
+    "product_code": 147,
+    "product_name": "The Mighty Meat Platter",
+    "material_cost": 3437.8,
+    "commission": 200.0,
+    "active": true
+  },
+  {
+    "product_code": 951,
+    "product_name": "The Velvet Stack Burger",
+    "material_cost": 512.2,
+    "commission": 50.0,
+    "active": false
+  },
+  {
+    "product_code": 192,
+    "product_name": "Thunder Fries Topping",
+    "material_cost": 173.2,
+    "commission": 60.0,
+    "active": false
+  },
+  {
+    "product_code": 115,
+    "product_name": "Vanilla Single Scoop",
+    "material_cost": 53.7,
+    "commission": 30.0,
+    "active": false
+  },
+  {
+    "product_code": 855,
+    "product_name": "Volcano Drums",
+    "material_cost": 431.2,
+    "commission": 30.0,
+    "active": false
+  }
+]

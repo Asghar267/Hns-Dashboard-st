@@ -190,12 +190,13 @@ def _fetch_sales_for_codes(
             s.pos_code
         FROM tblSales s WITH (NOLOCK)
         LEFT JOIN tblDefShops sh WITH (NOLOCK) ON sh.shop_id = s.shop_id
-        WHERE s.sale_date BETWEEN ? AND ?
-          AND s.shop_id IN ({placeholders(len(branch_ids))})
-          AND s.Cust_name = 'Food Panda'
-          AND CONVERT(nvarchar(4000), s.[{code_col}]) IN ({placeholders(len(chunk))})
-          {filter_clause}
-        """
+	        WHERE s.sale_date >= ?
+	          AND s.sale_date < DATEADD(DAY, 1, ?)
+	          AND s.shop_id IN ({placeholders(len(branch_ids))})
+	          AND s.Cust_name = 'Food Panda'
+	          AND CONVERT(nvarchar(4000), s.[{code_col}]) IN ({placeholders(len(chunk))})
+	          {filter_clause}
+	        """
         params = [start_date, end_date] + list(branch_ids) + list(chunk) + list(filter_params)
         df = pd.read_sql(q, conn, params=params)
         out_frames.append(df)
@@ -318,13 +319,14 @@ def fetch_foodpanda_sales_by_codes(
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_foodpanda_sales_in_range(
+def _fetch_foodpanda_sales_in_range_cached(
     start_date: str,
     end_date: str,
-    branch_ids: List[int],
+    branch_ids_key: tuple[int, ...],
     data_mode: str,
 ) -> pd.DataFrame:
     """Fetch all Food Panda sales in DB for a date range and branches (not restricted to Excel codes)."""
+    branch_ids = list(branch_ids_key)
     if not branch_ids:
         return pd.DataFrame()
 
@@ -364,6 +366,52 @@ def fetch_foodpanda_sales_in_range(
     return _attach_db_order_code_cols(df)
 
 
+def _normalize_branch_ids(branch_ids: object) -> list[int]:
+    if branch_ids is None:
+        return []
+    raw = None
+    try:
+        if hasattr(branch_ids, "tolist"):
+            raw = list(branch_ids.tolist())
+        elif isinstance(branch_ids, (list, tuple, set)):
+            raw = list(branch_ids)
+        else:
+            # Fall back only if it's an iterable of ids (avoid treating ints/strings as iterables).
+            if isinstance(branch_ids, (int, float, str)):
+                raw = [branch_ids]
+            else:
+                raw = list(branch_ids)
+    except Exception:
+        raw = []
+
+    out: list[int] = []
+    for v in raw:
+        if v is None:
+            continue
+        s = str(v).strip()
+        if not s:
+            continue
+        try:
+            out.append(int(float(s)))
+        except Exception:
+            continue
+    return out
+
+
+def fetch_foodpanda_sales_in_range(
+    start_date: str,
+    end_date: str,
+    branch_ids: List[int] | object,
+    data_mode: str,
+) -> pd.DataFrame:
+    """
+    Public wrapper that normalizes `branch_ids` to a hashable tuple for Streamlit caching.
+    This prevents errors like: `unhashable type: 'Series'`.
+    """
+    ids = _normalize_branch_ids(branch_ids)
+    return _fetch_foodpanda_sales_in_range_cached(start_date, end_date, tuple(ids), data_mode)
+
+
 @dataclass(frozen=True)
 class ReconcileResult:
     full: pd.DataFrame
@@ -378,8 +426,13 @@ def reconcile_foodpanda_orders(
     df_excel: pd.DataFrame,
     df_db: pd.DataFrame,
     tolerance_pkr: float = 1.0,
+    keep_all_matches: bool = False,
 ) -> ReconcileResult:
-    """Reconcile Excel Appendix A rows to DB sales and compute price verification."""
+    """Reconcile Excel Appendix A rows to DB sales and compute price verification.
+
+    When *keep_all_matches* is True, duplicate order codes are preserved
+    (no "best row per code" deduplication). Useful for the Final Difference Report.
+    """
     if df_excel is None or df_excel.empty:
         empty = pd.DataFrame()
         summary = pd.DataFrame([{"metric": "total_rows", "value": 0}])
@@ -465,8 +518,11 @@ def reconcile_foodpanda_orders(
         ascending=[True, True, False, False],
     )
 
-    # Keep best row per Excel code.
-    best = cand.groupby("excel_order_code_norm", as_index=False).head(1).reset_index(drop=True)
+    # Keep best row per Excel code (or all candidates if keep_all_matches).
+    if keep_all_matches:
+        best = cand.reset_index(drop=True)
+    else:
+        best = cand.groupby("excel_order_code_norm", as_index=False).head(1).reset_index(drop=True)
 
     # Build duplicates audit table (all candidates for dup keys + chosen flag).
     dup_audit = cand[cand["db_duplicate_key"]].copy()

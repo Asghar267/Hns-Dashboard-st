@@ -54,3 +54,6 @@ reports/
 
 # Misc
 __pycache__
+
+# Tooling artifacts
+.playwright-mcp/

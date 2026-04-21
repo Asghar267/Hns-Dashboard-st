@@ -1,0 +1,20 @@
+{
+  "Overview": true,
+  "Call Center": true,
+  "Order Takers": true,
+  "Chef Sales": true,
+  "Chef Targets": true,
+  "FP Final Difference": true,
+  "Food Panda": true,
+  "OT Targets": true,
+  "QR Commission": true,
+  "Khadda Diagnostics": false,
+  "Database Health Diagnostics": true,
+  "Material Cost Commission": true,
+  "Product PNL": true,
+  "Trends & Analytics": true,
+  "Ramzan Deals": true,
+  "Category Filters & Coverage": true,
+  "Pivot Tables": true,
+  "Admin & Snapshots": true
+}

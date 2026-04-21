@@ -58,17 +58,17 @@ def _cached_ot_data(start_date: str, end_date: str, branches: tuple[int, ...], m
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _cached_order_types(start_date: str, end_date: str, branches: tuple[int, ...], mode: str):
-    return get_cached_order_types(start_date, end_date, list(branches), mode)
+    return get_cached_order_types(start_date, end_date, list(branches), mode, apply_category_filters=False)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _cached_order_types_others(start_date: str, end_date: str, branches: tuple[int, ...], mode: str):
-    return get_cached_order_type_others_breakdown(start_date, end_date, list(branches), mode)
+    return get_cached_order_type_others_breakdown(start_date, end_date, list(branches), mode, apply_category_filters=False)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _cached_order_types_others_ot(start_date: str, end_date: str, branches: tuple[int, ...], mode: str):
-    return get_cached_order_type_others_order_takers(start_date, end_date, list(branches), mode)
+    return get_cached_order_type_others_order_takers(start_date, end_date, list(branches), mode, apply_category_filters=False)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -165,7 +165,7 @@ class OverviewTab:
             df_branch_display.loc[festival_mask, 'total_Nt_amount'] += festival2_sales
             if "Monthly_Target" in df_branch_display.columns:
                 df_branch_display.loc[festival_mask, 'Monthly_Target'] += float(festival2_target)
-            df_branch_display.loc[festival_mask, 'shop_name'] = "FESTIVAL"
+            df_branch_display.loc[festival_mask, 'shop_name'] = "FESTIVAL 1 & FESTIVAL 2"
             # Hide FESTIVAL 2 card in overview
             df_branch_display = df_branch_display.loc[~festival2_mask].copy()
 
@@ -185,6 +185,7 @@ class OverviewTab:
         
         # Display metrics with custom styling
         self._render_summary_metrics(total_sales, total_target, total_remaining, overall_achievement)
+        self._render_payment_split()
         self._render_branch_health_widget()
         
         st.markdown("---")
@@ -315,6 +316,76 @@ class OverviewTab:
             axis=1,
         )
         self._render_table(styler, width="stretch", height=230)
+
+    def _render_payment_split(self):
+        """Render cash vs online payment split using order-type mapping."""
+        st.subheader("Payment Split (Cash vs Online)")
+
+        if self.df_order_types is None:
+            with perf_trace("Overview fetch (order types for payment split)", "db"):
+                self.df_order_types = self._session_cached(
+                    "overview_order_types",
+                    lambda: _cached_order_types(
+                        self.start_date, self.end_date, tuple(sorted(self.selected_branches)), self.data_mode
+                    ),
+                )
+
+        if self.df_order_types is None or self.df_order_types.empty:
+            st.info("No payment split data available for selected filters.")
+            return
+
+        df = self.df_order_types.copy()
+        df["order_type"] = df["order_type"].astype(str).str.strip()
+        df["total_sales"] = pd.to_numeric(df["total_sales"], errors="coerce").fillna(0.0)
+        df["total_orders"] = pd.to_numeric(df["total_orders"], errors="coerce").fillna(0).astype(int)
+
+        online_types = {"Web Online Paid Order", "Credit Card South", "HNS Credit Card"}
+        cash_types = {"Cash Web Online Order"}
+
+        online_mask = df["order_type"].isin(online_types)
+        cash_mask = df["order_type"].isin(cash_types)
+        other_mask = ~(online_mask | cash_mask)
+
+        online_sales = float(df.loc[online_mask, "total_sales"].sum())
+        online_orders = int(df.loc[online_mask, "total_orders"].sum())
+        cash_sales = float(df.loc[cash_mask, "total_sales"].sum())
+        cash_orders = int(df.loc[cash_mask, "total_orders"].sum())
+        other_sales = float(df.loc[other_mask, "total_sales"].sum())
+        other_orders = int(df.loc[other_mask, "total_orders"].sum())
+
+        total_sales = float(df["total_sales"].sum() or 0.0)
+        total_orders = int(df["total_orders"].sum() or 0)
+
+        online_pct = (online_sales / total_sales * 100.0) if total_sales > 0 else 0.0
+        cash_pct = (cash_sales / total_sales * 100.0) if total_sales > 0 else 0.0
+        other_pct = (other_sales / total_sales * 100.0) if total_sales > 0 else 0.0
+
+        cols = responsive_columns(self.responsive, desktop=3, tablet=3, phone=1)
+        with cols[0]:
+            st.metric("Cash Payment", format_currency(cash_sales), f"{cash_orders:,} orders")
+        with cols[1 % len(cols)]:
+            st.metric("Online Payment", format_currency(online_sales), f"{online_orders:,} orders")
+        with cols[2 % len(cols)]:
+            st.metric("Other / Unmapped", format_currency(other_sales), f"{other_orders:,} orders")
+
+        split_df = pd.DataFrame(
+            [
+                {"bucket": "Cash Payment", "orders": cash_orders, "sales": cash_sales, "sales_pct": cash_pct},
+                {"bucket": "Online Payment", "orders": online_orders, "sales": online_sales, "sales_pct": online_pct},
+                {"bucket": "Other / Unmapped", "orders": other_orders, "sales": other_sales, "sales_pct": other_pct},
+                {"bucket": "Total", "orders": total_orders, "sales": total_sales, "sales_pct": 100.0 if total_sales > 0 else 0.0},
+            ]
+        )
+        display_df = split_df.copy()
+        display_df["sales"] = display_df["sales"].apply(format_currency)
+        display_df["orders"] = display_df["orders"].apply(lambda x: f"{int(x):,}")
+        display_df["sales_pct"] = display_df["sales_pct"].apply(lambda x: f"{x:.1f}%")
+        self._render_table(display_df, width="stretch", height=220)
+
+        st.caption(
+            "Mapping used: Online = Web Online Paid Order + Credit Card South + HNS Credit Card; "
+            "Cash = Cash Web Online Order; remaining types are shown as Other/Unmapped."
+        )
 
     def _render_top_highlights(self):
         """Render top 5 highlights"""
@@ -482,8 +553,18 @@ class OverviewTab:
             
             # Order type metrics
             metric_cols = responsive_columns(self.responsive, desktop=3, tablet=2, phone=1)
-            
-            order_types_display = ['Food Panda', 'Delivery', 'Dine IN']
+
+            order_types_display = [
+                "Food Panda",
+                "Takeaway",
+                "Web Online Paid Order",
+                "Cash Web Online Order",
+                "Dine IN",
+                "Credit Card South",
+                "HNS Credit Card",
+                "Delivery",
+                "Others",
+            ]
             for idx, ot in enumerate(order_types_display):
                 ot_data = self.df_order_types[self.df_order_types['order_type'] == ot]
                 if not ot_data.empty:

@@ -5,6 +5,7 @@ Targets vs achievements by category (sale/qty) using KDS chef_sale categories.
 
 from __future__ import annotations
 
+from calendar import monthrange
 from datetime import datetime
 
 import pandas as pd
@@ -30,6 +31,10 @@ def _clean_name(name: object) -> str:
             w = "ORDER"
         elif w == "SIDES":
             w = "SIDE"
+        elif w == "DEALS":
+            w = "DEAL"
+        elif w == "NASHTA":
+            w = "BREAKFAST"
         out.append(w)
     return " ".join(out).strip()
 
@@ -143,8 +148,8 @@ class ChefTargetsTab:
         else:
             df_targets["target_type"] = df_targets["category_name"].astype(str).apply(get_target_type)
 
-        # Sales data for this branch (uses cached line items)
-        df_line_item = get_cached_line_items(self.start_date, self.end_date, self.selected_branches, self.data_mode)
+# Sales data for this branch (uses cached line items)
+        df_line_item = get_cached_line_items(self.start_date, self.end_date, self.selected_branches, self.data_mode, apply_category_filters=False)
         if df_line_item is None or df_line_item.empty:
             st.info("No line-item sales available for selected period.")
             return
@@ -154,7 +159,7 @@ class ChefTargetsTab:
             st.info("No chef sales for this branch in selected period.")
             return
 
-        products_to_hide = {"Sales - Employee Food", "Deals", "Modifiers"}
+        products_to_hide = {"Sales - Employee Food", "Modifiers"}
         if "product" in df_sales_branch.columns:
             df_sales_branch = df_sales_branch[~df_sales_branch["product"].astype(str).isin(products_to_hide)]
 
@@ -170,6 +175,9 @@ class ChefTargetsTab:
 
         df_join["Product"] = df_join["product"].fillna(df_join["category_name"])
         df_join["Target"] = pd.to_numeric(df_join.get("target_amount"), errors="coerce").fillna(0.0)
+        
+        num_days = monthrange(self.target_year, self.target_month)[1]
+        df_join["Daily Target"] = df_join["Target"] / num_days
 
         # Choose current based on type
         df_join["Current"] = df_join.apply(
@@ -187,8 +195,9 @@ class ChefTargetsTab:
             axis=1,
         )
 
-        display = df_join[["Product", "target_type", "Target", "Current", "Remaining", "Achievement %", "Bonus"]].copy()
+        display = df_join[["Product", "target_type", "Target", "Daily Target", "Current", "Remaining", "Achievement %", "Bonus"]].copy()
         display["Target"] = display["Target"].apply(lambda x: f"{x:,.0f}")
+        display["Daily Target"] = display["Daily Target"].apply(lambda x: f"{x:,.0f}")
         display["Current"] = display["Current"].apply(lambda x: f"{x:,.0f}")
         display["Remaining"] = display["Remaining"].apply(lambda x: f"{x:,.0f}")
         display["Achievement %"] = display["Achievement %"].apply(lambda x: f"{x:.1f}%")
@@ -234,7 +243,7 @@ class ChefTargetsTab:
             st.plotly_chart(fig, width="stretch")
 
         # Export
-        raw_export = df_join[["Product", "target_type", "Target", "Current", "Remaining", "Achievement %", "Bonus"]].copy()
+        raw_export = df_join[["Product", "target_type", "Target", "Daily Target", "Current", "Remaining", "Achievement %", "Bonus"]].copy()
         st.download_button(
             "Download Chef Targets Excel",
             export_excel(raw_export, sheet_name="Chef Targets"),

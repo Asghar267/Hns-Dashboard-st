@@ -34,6 +34,8 @@ from modules.config import (
     DEFAULT_EXCLUDED_CATEGORY_IDS,
     DEFAULT_BRANCH_TARGETS,
     EXCLUDED_BRANCH_NAMES,
+    FRESH_PICK_PRODUCTS,
+    FRESH_PICK_SALES_ITEM_NAMES,
 )
 from modules.utils import log_query_time
 
@@ -471,15 +473,19 @@ def get_all_available_categories() -> pd.DataFrame:
     except Exception:
         pass
     
-    # Get categories from Candelahns TempProductBarcode (mapping table)
+    # Get categories from Candelahns (official tblDefLineItems)
     try:
         conn = pool.get_connection("candelahns")
         df_candel = pd.read_sql(
             """SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
             SELECT DISTINCT field_name as category_name 
+            FROM tblDefLineItems WITH (NOLOCK)
+            WHERE field_name IS NOT NULL AND field_name <> ''
+            UNION
+            SELECT DISTINCT field_name as category_name 
             FROM TempProductBarcode WITH (NOLOCK)
             WHERE field_name IS NOT NULL AND field_name <> ''
-            ORDER BY field_name""",
+            ORDER BY category_name""",
             conn
         )
         if not df_candel.empty:
@@ -584,7 +590,10 @@ def get_cached_category_monthly_history(
             s.Nt_amount
         FROM tblSales s WITH (NOLOCK)
         JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
-        LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
+        -- Official Category Mapping Chain:
+        LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
+        LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+        LEFT JOIN tblDefLineItems t WITH (NOLOCK) ON p.line_item_id = t.line_item_id
         WHERE s.sale_date BETWEEN ? AND ?
             AND s.shop_id IN ({placeholders(len(branch_ids))})
             {category_clause}
@@ -642,9 +651,10 @@ def get_cached_top_products(
             s.Nt_amount
         FROM tblSales s WITH (NOLOCK)
         JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
-        LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
+        -- Official Category Mapping Chain:
         LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
         LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+        LEFT JOIN tblDefLineItems t WITH (NOLOCK) ON p.line_item_id = t.line_item_id
         WHERE s.sale_date BETWEEN ? AND ?
             AND s.shop_id IN ({placeholders(len(branch_ids))})
             {category_clause}
@@ -698,11 +708,10 @@ def get_cached_top_products_overview(
             SUM(li.qty * li.Unit_price) OVER (PARTITION BY s.sale_id) AS line_total
         FROM tblSales s WITH (NOLOCK)
         JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
-        LEFT JOIN (
-            SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name
-            FROM TempProductBarcode WITH (NOLOCK)
-            UNION ALL SELECT 2642, '0570', 'Deals'
-        ) t ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
+-- Official Category Mapping Chain:
+        LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
+        LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+        LEFT JOIN tblDefLineItems t WITH (NOLOCK) ON p.line_item_id = t.line_item_id
         WHERE s.sale_date BETWEEN ? AND ?
             AND s.shop_id IN ({placeholders(len(branch_ids))})
             {category_clause}
@@ -713,11 +722,10 @@ def get_cached_top_products_overview(
         COALESCE(t.field_name, '(Unmapped)') AS product,
         SUM((qty * Unit_price) / NULLIF(line_total, 0) * Nt_amount) AS total_sales
     FROM sale_lines sl
-    LEFT JOIN (
-        SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name
-        FROM TempProductBarcode WITH (NOLOCK)
-        UNION ALL SELECT 2642, '0570', 'Deals'
-    ) t ON sl.Product_Item_ID = t.Product_Item_ID AND sl.Product_code = t.Product_code
+-- Official Category Mapping Chain:
+        LEFT JOIN tblProductItem pi WITH (NOLOCK) ON sl.Product_Item_ID = pi.Product_Item_ID
+        LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+        LEFT JOIN tblDefLineItems t WITH (NOLOCK) ON p.line_item_id = t.line_item_id
     GROUP BY COALESCE(t.field_name, '(Unmapped)')
     ORDER BY total_sales DESC
     """
@@ -842,7 +850,10 @@ def get_cached_branch_summary_variants(
             CASE WHEN {category_expr} THEN 1 ELSE 0 END AS category_ok
         FROM tblSales s WITH (NOLOCK)
         JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
-        LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
+        -- Official Category Mapping Chain:
+        LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
+        LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+        LEFT JOIN tblDefLineItems t WITH (NOLOCK) ON p.line_item_id = t.line_item_id
         WHERE s.sale_date BETWEEN ? AND ?
             AND s.shop_id IN ({placeholders(len(branch_ids))})
     ),
@@ -992,16 +1003,88 @@ def get_cached_cashier_sales(
         st.error(f"Error fetching cashier sales: {e}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=HEAVY_CACHE_TTL)
-def get_cached_line_items(
+
+@st.cache_data(ttl=DatabaseConfig.CACHE_TTL)
+def get_cached_shift_sales(
     start_date: str,
     end_date: str,
     branch_ids: List[int],
     data_mode: str
 ) -> pd.DataFrame:
+    """Fetch sales aggregated by shift (Morning, Lunch, Dinner) with timezone correction (UTC-1 to PKT)."""
+    filter_clause, filter_params = build_filter_clause(data_mode)
+    
+    query = f"""
+    SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+    WITH shift_raw AS (
+        SELECT 
+            s.shop_id,
+            sh.shop_name,
+            s.Nt_amount,
+            DATEPART(HOUR, DATEADD(HOUR, 6, s.sale_date)) as pkt_hour
+        FROM tblSales s WITH (NOLOCK)
+        LEFT JOIN tblDefShops sh WITH (NOLOCK) ON s.shop_id = sh.shop_id
+        WHERE s.sale_date BETWEEN ? AND ?
+          AND s.shop_id IN ({placeholders(len(branch_ids))})
+          {filter_clause}
+    ),
+    shifts AS (
+        SELECT 
+            shop_id,
+            shop_name,
+            Nt_amount,
+            CASE 
+                WHEN pkt_hour >= 6 AND pkt_hour < 12 THEN 'Morning'
+                WHEN pkt_hour >= 12 AND pkt_hour < 17 THEN 'Lunch'
+                ELSE 'Dinner'
+            END as shift_name
+        FROM shift_raw
+    )
+    SELECT 
+        shop_id,
+        shop_name,
+        shift_name,
+        COUNT(*) as total_orders,
+        SUM(Nt_amount) as total_sales
+    FROM shifts
+    GROUP BY shop_id, shop_name, shift_name
+    ORDER BY shop_id, 
+             CASE shift_name 
+                WHEN 'Morning' THEN 1 
+                WHEN 'Lunch' THEN 2 
+                ELSE 3 
+             END
+    """
+    
+    params = [start_date, end_date] + branch_ids + filter_params
+    
+    try:
+        conn = pool.get_connection("candelahns")
+        df = pd.read_sql(query, conn, params=params)
+        df['total_sales'] = df['total_sales'].astype(float)
+        return df
+    except Exception as e:
+        st.error(f"Error fetching shift sales: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=HEAVY_CACHE_TTL)
+def get_cached_line_items(
+    start_date: str,
+    end_date: str,
+    branch_ids: List[int],
+    data_mode: str,
+    apply_category_filters: bool = False,
+    cache_version: int = 1
+) -> pd.DataFrame:
     """Fetch line items with caching (filtered line totals to avoid full table scans)."""
     filter_clause, filter_params = build_filter_clause(data_mode)
-    category_clause, category_params = build_category_name_filter_clause("t")
+    
+    # Only apply category filters if explicitly requested
+    category_clause = "1=1"
+    category_params = []
+    if apply_category_filters:
+        category_clause, category_params = build_category_name_filter_clause("t")
 
     query = f"""
     SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
@@ -1013,28 +1096,52 @@ def get_cached_line_items(
             {filter_clause}
     ),
     line_totals AS (
-        SELECT li.sale_id, SUM(li.qty * li.Unit_price) AS line_total
+        SELECT 
+            li.sale_id, 
+            SUM(li.qty * li.Unit_price) AS line_total,
+            SUM(li.qty) AS total_qty
         FROM tblSalesLineItems li WITH (NOLOCK)
         JOIN filtered_sales fs ON fs.sale_id = li.sale_id
-        WHERE li.Unit_price > 0
         GROUP BY li.sale_id
     )
     SELECT 
         fs.shop_id,
         sh.shop_name,
-        COALESCE(t.field_name, '(Unmapped)') AS product,
+        COALESCE(
+            CASE 
+                WHEN li.Product_Item_ID IN (2642, 3782) OR p.item_name LIKE '%Deal%' OR p.item_name LIKE '%Meal%' THEN 'Deals'
+                ELSE t.field_name 
+            END, 
+            p.item_name,
+            '(Unmapped)'
+        ) AS product,
+        'v105' AS cache_ver,
         SUM(li.qty) AS total_qty,
-        SUM((li.qty * li.Unit_price) / NULLIF(lt.line_total, 0) * fs.Nt_amount) AS total_line_value_incl_tax
+        SUM(
+            CASE 
+                WHEN lt.line_total > 0 THEN (li.qty * li.Unit_price) / lt.line_total * fs.Nt_amount
+                ELSE (li.qty / NULLIF(lt.total_qty, 0)) * fs.Nt_amount
+            END
+        ) AS total_line_value_incl_tax
     FROM filtered_sales fs
     JOIN tblSalesLineItems li WITH (NOLOCK) ON fs.sale_id = li.sale_id
-    JOIN line_totals lt ON lt.sale_id = fs.sale_id
-    LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t
-        ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
+    LEFT JOIN line_totals lt ON lt.sale_id = fs.sale_id
+    -- Official Category Mapping Chain:
+    LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
+    LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+    LEFT JOIN tblDefLineItems t WITH (NOLOCK) ON p.line_item_id = t.line_item_id
     LEFT JOIN tblDefShops sh WITH (NOLOCK) ON fs.shop_id = sh.shop_id
-    WHERE li.Unit_price > 0
-        {category_clause}
-    GROUP BY fs.shop_id, sh.shop_name, COALESCE(t.field_name, '(Unmapped)')
-    ORDER BY fs.shop_id, COALESCE(t.field_name, '(Unmapped)')
+    WHERE {category_clause}
+    GROUP BY fs.shop_id, sh.shop_name, 
+             COALESCE(
+                CASE 
+                    WHEN li.Product_Item_ID IN (2642, 3782) OR p.item_name LIKE '%Deal%' OR p.item_name LIKE '%Meal%' THEN 'Deals'
+                    ELSE t.field_name 
+                END, 
+                p.item_name,
+                '(Unmapped)'
+             )
+    ORDER BY fs.shop_id, product
     """
 
     params = [start_date, end_date] + branch_ids + filter_params + category_params
@@ -1055,15 +1162,24 @@ def get_cached_order_types(
     start_date: str,
     end_date: str,
     branch_ids: List[int],
-    data_mode: str
+    data_mode: str,
+    apply_category_filters: bool = False
 ) -> pd.DataFrame:
-    """Fetch order type analysis with caching and category filtering"""
+    """Fetch order type analysis with caching and optional category filtering"""
     filter_clause, filter_params = build_filter_clause(data_mode)
-    settings = get_saved_category_filters()
-    include_names = [str(x).strip() for x in settings.get("included_category_names", []) if str(x).strip()]
-    exclude_names = [str(x).strip() for x in settings.get("excluded_category_names", []) if str(x).strip()]
-    has_category_filters = bool(include_names or exclude_names)
-    category_clause, category_params = build_category_name_filter_clause("t")
+    
+    # Check if we should apply category filters
+    has_category_filters = False
+    category_clause = ""
+    category_params = []
+    
+    if apply_category_filters:
+        settings = get_saved_category_filters()
+        include_names = [str(x).strip() for x in settings.get("included_category_names", []) if str(x).strip()]
+        exclude_names = [str(x).strip() for x in settings.get("excluded_category_names", []) if str(x).strip()]
+        if include_names or exclude_names:
+            has_category_filters = True
+            category_clause, category_params = build_category_name_filter_clause("t")
 
     if not has_category_filters:
         # Fast path when no category filters are active (uses sales only).
@@ -1125,7 +1241,10 @@ def get_cached_order_types(
                 SUM(li.qty * li.Unit_price) OVER (PARTITION BY s.sale_id) AS line_total
             FROM tblSales s WITH (NOLOCK)
             JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
-            LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
+            -- Official Category Mapping Chain:
+        LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
+        LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+        LEFT JOIN tblDefLineItems t WITH (NOLOCK) ON p.line_item_id = t.line_item_id
             WHERE s.sale_date BETWEEN ? AND ?
                 AND s.shop_id IN ({placeholders(len(branch_ids))})
                 {category_clause}
@@ -1160,7 +1279,8 @@ def get_cached_order_type_others_breakdown(
     start_date: str,
     end_date: str,
     branch_ids: List[int],
-    data_mode: str
+    data_mode: str,
+    apply_category_filters: bool = True
 ) -> pd.DataFrame:
     """
     Diagnose what is included in the 'Others' bucket for order_type analysis.
@@ -1170,11 +1290,19 @@ def get_cached_order_type_others_breakdown(
     category filters).
     """
     filter_clause, filter_params = build_filter_clause(data_mode)
-    settings = get_saved_category_filters()
-    include_names = [str(x).strip() for x in settings.get("included_category_names", []) if str(x).strip()]
-    exclude_names = [str(x).strip() for x in settings.get("excluded_category_names", []) if str(x).strip()]
-    has_category_filters = bool(include_names or exclude_names)
-    category_clause, category_params = build_category_name_filter_clause("t")
+    
+    # Check if we should apply category filters
+    has_category_filters = False
+    category_clause = ""
+    category_params = []
+    
+    if apply_category_filters:
+        settings = get_saved_category_filters()
+        include_names = [str(x).strip() for x in settings.get("included_category_names", []) if str(x).strip()]
+        exclude_names = [str(x).strip() for x in settings.get("excluded_category_names", []) if str(x).strip()]
+        if include_names or exclude_names:
+            has_category_filters = True
+            category_clause, category_params = build_category_name_filter_clause("t")
 
     # Must match the CASE mapping in get_cached_order_types.
     known_order_types = [
@@ -1277,7 +1405,8 @@ def get_cached_order_type_others_order_takers(
     start_date: str,
     end_date: str,
     branch_ids: List[int],
-    data_mode: str
+    data_mode: str,
+    apply_category_filters: bool = True
 ) -> pd.DataFrame:
     """
     Diagnose which order takers are contributing to the 'Others' bucket.
@@ -1286,11 +1415,19 @@ def get_cached_order_type_others_order_takers(
     get_cached_order_types.
     """
     filter_clause, filter_params = build_filter_clause(data_mode)
-    settings = get_saved_category_filters()
-    include_names = [str(x).strip() for x in settings.get("included_category_names", []) if str(x).strip()]
-    exclude_names = [str(x).strip() for x in settings.get("excluded_category_names", []) if str(x).strip()]
-    has_category_filters = bool(include_names or exclude_names)
-    category_clause, category_params = build_category_name_filter_clause("t")
+    
+    # Check if we should apply category filters
+    has_category_filters = False
+    category_clause = ""
+    category_params = []
+    
+    if apply_category_filters:
+        settings = get_saved_category_filters()
+        include_names = [str(x).strip() for x in settings.get("included_category_names", []) if str(x).strip()]
+        exclude_names = [str(x).strip() for x in settings.get("excluded_category_names", []) if str(x).strip()]
+        if include_names or exclude_names:
+            has_category_filters = True
+            category_clause, category_params = build_category_name_filter_clause("t")
 
     known_order_types = [
         "Food Panda",
@@ -1340,8 +1477,10 @@ def get_cached_order_type_others_order_takers(
                 SUM(li.qty * li.Unit_price) OVER (PARTITION BY s.sale_id) AS line_total
             FROM tblSales s WITH (NOLOCK)
             JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
-            LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t
-                ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
+    -- Official Category Mapping Chain:
+    LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
+    LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+    LEFT JOIN tblDefLineItems t WITH (NOLOCK) ON p.line_item_id = t.line_item_id
             LEFT JOIN tblDefShopEmployees e WITH (NOLOCK) ON s.employee_id = e.shop_employee_id
             LEFT JOIN tblDefShops sh WITH (NOLOCK) ON s.shop_id = sh.shop_id
             WHERE s.sale_date BETWEEN ? AND ?
@@ -1382,11 +1521,100 @@ def get_cached_fresh_pick_sales(
     end_date: str,
     data_mode: str
 ) -> pd.DataFrame:
-    """Fresh Pick removed in this deployment — return empty DataFrame."""
-    # Keep function available for callers but return empty DataFrame
-    try:
+    """Fetch Fresh Pick sales from CandelaFP."""
+    if not FRESH_PICK_PRODUCTS and not FRESH_PICK_SALES_ITEM_NAMES:
         return pd.DataFrame()
-    except Exception:
+
+    driver = os.environ.get("FRESH_PICK_DB_DRIVER", "SQL Server")
+    server = os.environ.get("FRESH_PICK_DB_SERVER", "103.86.55.183,10306")
+    database = os.environ.get("FRESH_PICK_DB_NAME", "CandelaFP")
+    uid = os.environ.get("FRESH_PICK_DB_UID", "ReadOnlyUser")
+    pwd = os.environ.get("FRESH_PICK_DB_PWD", "902729@Rafy")
+    timeout = int(os.environ.get("FRESH_PICK_DB_TIMEOUT", "30"))
+
+    # CandelaFP naming sometimes differs from KDS targets (short names, punctuation).
+    # Filter using a combined (lowercased + trimmed) allowlist to keep results consistent.
+    filter_names: List[str] = []
+    for name in (FRESH_PICK_PRODUCTS or []) + (FRESH_PICK_SALES_ITEM_NAMES or []):
+        text = str(name or "").strip().lower()
+        if text:
+            filter_names.append(text)
+    # de-dup while preserving order
+    filter_names = list(dict.fromkeys(filter_names))
+
+    product_clause = f"AND LOWER(LTRIM(RTRIM(p.item_name))) IN ({placeholders(len(filter_names))})"
+    extra_clause = ""
+    extra_params: List = []
+
+    if data_mode == "Filtered":
+        if BLOCKED_NAMES:
+            extra_clause += f" AND (s.Cust_name NOT IN ({placeholders(len(BLOCKED_NAMES))}) OR s.Cust_name IS NULL)"
+            extra_params.extend(BLOCKED_NAMES)
+        if BLOCKED_COMMENTS:
+            extra_clause += (
+                f" AND (s.Additional_Comments NOT IN ({placeholders(len(BLOCKED_COMMENTS))}) "
+                "OR s.Additional_Comments IS NULL)"
+            )
+            extra_params.extend(BLOCKED_COMMENTS)
+
+    query = f"""
+    SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+    WITH sale_totals AS (
+        SELECT
+            sale_id,
+            SUM(COALESCE(qty, 0) * COALESCE(Unit_price, 0)) AS line_total
+        FROM dbo.tblSalesLineItems WITH (NOLOCK)
+        GROUP BY sale_id
+    )
+    SELECT
+        LTRIM(RTRIM(ISNULL(s.Cust_name, ''))) AS Customer,
+        p.item_name AS Product,
+        SUM(COALESCE(li.qty, 0)) AS TotalQuantitySold,
+        SUM(COALESCE(li.qty, 0) * COALESCE(li.Unit_price, 0)) AS TotalRevenue,
+        SUM(
+            (COALESCE(li.qty, 0) * COALESCE(li.Unit_price, 0))
+            / NULLIF(st.line_total, 0)
+            * COALESCE(s.NT_amount, 0)
+        ) AS TotalSaleAmount,
+        COUNT(DISTINCT s.sale_id) AS NumberOfSales
+    FROM dbo.tblSales s WITH (NOLOCK)
+    INNER JOIN dbo.tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
+    LEFT JOIN dbo.tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
+    LEFT JOIN dbo.tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.Product_ID
+    INNER JOIN sale_totals st ON st.sale_id = s.sale_id
+    WHERE CAST(s.sale_date AS date) BETWEEN ? AND ?
+      {product_clause}
+      {extra_clause}
+    GROUP BY LTRIM(RTRIM(ISNULL(s.Cust_name, ''))), p.item_name
+    ORDER BY TotalSaleAmount DESC;
+    """
+
+    params = [start_date, end_date] + filter_names + extra_params
+
+    try:
+        conn_str = (
+            f"DRIVER={{{driver}}};"
+            f"SERVER={server};"
+            f"DATABASE={database};"
+            f"UID={uid};"
+            f"PWD={pwd};"
+            "Encrypt=no;"
+            "TrustServerCertificate=yes;"
+            f"Connection Timeout={timeout};"
+        )
+        with pyodbc.connect(conn_str) as conn:
+            df = pd.read_sql(query, conn, params=params)
+
+        if df.empty:
+            return df
+
+        for col in ("TotalQuantitySold", "TotalRevenue", "TotalSaleAmount", "NumberOfSales"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+        return df
+    except Exception as e:
+        st.error(f"Error fetching Fresh Pick sales: {e}")
         return pd.DataFrame()
 
 
@@ -1425,7 +1653,10 @@ def get_cached_product_monthly_sales(
         SUM((li.qty * li.Unit_price) / NULLIF(st.line_total, 0) * s.Nt_amount) AS Total_Sales
     FROM tblSales s WITH (NOLOCK)
     JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
-    LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
+    -- Official Category Mapping Chain:
+        LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
+        LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+        LEFT JOIN tblDefLineItems t WITH (NOLOCK) ON p.line_item_id = t.line_item_id
     JOIN (
         SELECT sale_id, SUM(qty * Unit_price) AS line_total
         FROM tblSalesLineItems WITH (NOLOCK)
@@ -1502,9 +1733,10 @@ def get_cached_product_monthly_sales_by_product(
         SUM((li.qty * li.Unit_price) / NULLIF(st.line_total, 0) * s.Nt_amount) AS Total_Sales
     FROM tblSales s WITH (NOLOCK)
     JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
-    LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
-    LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
-    LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+    -- Official Category Mapping Chain:
+        LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
+        LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+        LEFT JOIN tblDefLineItems t WITH (NOLOCK) ON p.line_item_id = t.line_item_id
     JOIN (
         SELECT s.sale_id, s.shop_id, SUM(li.qty * li.Unit_price) AS line_total
         FROM tblSales s WITH (NOLOCK)
@@ -1559,7 +1791,10 @@ def get_cached_monthly_sales(
             SUM(li.qty * li.Unit_price) OVER (PARTITION BY s.sale_id, s.shop_id) AS line_total
         FROM tblSales s WITH (NOLOCK)
         JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
-        LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
+        -- Official Category Mapping Chain:
+        LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
+        LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+        LEFT JOIN tblDefLineItems t WITH (NOLOCK) ON p.line_item_id = t.line_item_id
         WHERE s.sale_date BETWEEN ? AND ?
             AND s.shop_id IN ({placeholders(len(branch_ids))})
             {category_clause}
@@ -1617,7 +1852,10 @@ def get_cached_daily_sales(
             SUM(li.qty * li.Unit_price) OVER (PARTITION BY s.sale_id, s.shop_id) AS line_total
         FROM tblSales s WITH (NOLOCK)
         JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
-        LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
+        -- Official Category Mapping Chain:
+        LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
+        LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+        LEFT JOIN tblDefLineItems t WITH (NOLOCK) ON p.line_item_id = t.line_item_id
         WHERE s.sale_date >= ? AND s.sale_date < ?
             AND s.shop_id IN ({placeholders(len(branch_ids))})
             {category_clause}
@@ -1710,7 +1948,10 @@ def get_cached_daily_sales_by_branch(
             SUM(li.qty * li.Unit_price) OVER (PARTITION BY s.sale_id, s.shop_id) AS line_total
         FROM tblSales s WITH (NOLOCK)
         JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
-        LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
+        -- Official Category Mapping Chain:
+        LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
+        LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+        LEFT JOIN tblDefLineItems t WITH (NOLOCK) ON p.line_item_id = t.line_item_id
         WHERE s.sale_date >= ? AND s.sale_date < ?
             AND s.shop_id IN ({placeholders(len(branch_ids))})
             {category_clause}
@@ -1797,9 +2038,10 @@ def get_cached_daily_sales_by_products(
         SUM((li.qty * li.Unit_price) / NULLIF(st.line_total, 0) * s.Nt_amount) AS total_Nt_amount
     FROM tblSales s WITH (NOLOCK)
     JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
-    LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
-    LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
-    LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+    -- Official Category Mapping Chain:
+        LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
+        LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+        LEFT JOIN tblDefLineItems t WITH (NOLOCK) ON p.line_item_id = t.line_item_id
     JOIN (
         SELECT s.sale_id, s.shop_id, SUM(li.qty * li.Unit_price) AS line_total
         FROM tblSales s WITH (NOLOCK)
@@ -1856,7 +2098,10 @@ def get_cached_category_filter_coverage(
             SUM(li.qty * li.Unit_price) OVER (PARTITION BY s.sale_id, s.shop_id) AS line_total
         FROM tblSales s WITH (NOLOCK)
         JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
-        LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
+        -- Official Category Mapping Chain:
+        LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
+        LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+        LEFT JOIN tblDefLineItems t WITH (NOLOCK) ON p.line_item_id = t.line_item_id
         WHERE s.sale_date BETWEEN ? AND ?
             AND s.shop_id IN ({placeholders(len(branch_ids))})
     )
@@ -1991,7 +2236,10 @@ def get_cached_qr_sales(
             SUM(li.qty * li.Unit_price) OVER (PARTITION BY s.sale_id) AS line_total
         FROM tblSales s WITH (NOLOCK)
         JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
-        LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
+        -- Official Category Mapping Chain:
+        LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
+        LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+        LEFT JOIN tblDefLineItems t WITH (NOLOCK) ON p.line_item_id = t.line_item_id
         WHERE s.sale_date BETWEEN ? AND ?
             AND s.shop_id IN ({placeholders(len(branch_ids))})
             AND s.external_ref_type = 'Blinkco order'
@@ -2105,6 +2353,9 @@ def get_cached_targets(
         )
         ot_table = _resolve_table_across_databases(
             conn, "ot_targets", preferred_schema="dbo", candidate_databases=alt_dbs
+        )
+        fresh_table = _resolve_table_across_databases(
+            conn, "fresh_pick_targets", preferred_schema="dbo", candidate_databases=alt_dbs
         )
 
         # Branch targets
@@ -2263,8 +2514,53 @@ def get_cached_targets(
                     )
                     df_ot_targets = pd.DataFrame()
         
-        # Fresh Pick targets removed in this deployment
-        df_fresh_targets = pd.DataFrame()
+        # Fresh Pick targets
+        if fresh_table is None:
+            df_fresh_targets = pd.DataFrame()
+        else:
+            try:
+                if _table_supports_period_filters(conn, fresh_table):
+                    df_fresh_targets = pd.read_sql(
+                        f"""
+                        SELECT
+                            customer_name AS vendor,
+                            product_name,
+                            monthly_target_qty,
+                            daily_target_qty
+                        FROM {fresh_table}
+                        WHERE target_year = ? AND target_month = ?
+                        """,
+                        conn,
+                        params=(year, month),
+                    )
+                elif _table_supports_target_date(conn, fresh_table):
+                    df_fresh_targets = pd.read_sql(
+                        f"""
+                        SELECT
+                            customer_name AS vendor,
+                            product_name,
+                            monthly_target_qty,
+                            daily_target_qty
+                        FROM {fresh_table}
+                        WHERE target_date = ?
+                        """,
+                        conn,
+                        params=(date(year, month, 1),),
+                    )
+                else:
+                    df_fresh_targets = pd.read_sql(
+                        f"""
+                        SELECT
+                            customer_name AS vendor,
+                            product_name,
+                            monthly_target_qty,
+                            daily_target_qty
+                        FROM {fresh_table}
+                        """,
+                        conn,
+                    )
+            except Exception:
+                df_fresh_targets = pd.DataFrame()
         
         # Clear flag indicating default targets are in use
         try:
@@ -2422,7 +2718,10 @@ def get_cached_unmapped_products(
         JOIN tblSalesLineItems li WITH (NOLOCK) ON s.sale_id = li.sale_id
         LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
         LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.Product_ID
-        LEFT JOIN (SELECT Product_Item_ID, CAST(Product_code AS VARCHAR(50)) as Product_code, CAST(field_name AS VARCHAR(100)) as field_name FROM TempProductBarcode WITH (NOLOCK) UNION ALL SELECT 2642, '0570', 'Deals') t ON li.Product_Item_ID = t.Product_Item_ID AND li.Product_code = t.Product_code
+        -- Official Category Mapping Chain:
+        LEFT JOIN tblProductItem pi WITH (NOLOCK) ON li.Product_Item_ID = pi.Product_Item_ID
+        LEFT JOIN tblDefProducts p WITH (NOLOCK) ON pi.Product_ID = p.product_id
+        LEFT JOIN tblDefLineItems t WITH (NOLOCK) ON p.line_item_id = t.line_item_id
         JOIN (
             SELECT sale_id, SUM(qty * Unit_price) AS line_total
             FROM tblSalesLineItems WITH (NOLOCK)
@@ -2804,3 +3103,4 @@ def refresh_all_caches():
     """Clear all cached data"""
     st.cache_data.clear()
     st.success("All caches cleared!")
+

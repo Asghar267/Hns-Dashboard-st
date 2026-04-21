@@ -60,7 +60,9 @@ def _build_kdsdb_conn_str() -> str:
         return "".join(base)
 
     uid = os.environ.get("KDSDB_UID", "sa")
-    pwd = os.environ.get("KDSDB_PWD", "your_password")
+    pwd = os.environ.get("KDSDB_PWD", "")
+    if not pwd:
+        raise RuntimeError("Missing KDSDB_PWD environment variable for SQL-auth KDS_DB connection.")
     base.insert(0, f"DRIVER={{{driver_sql}}};")
     base.extend(
         [
@@ -210,12 +212,16 @@ class EnhancedConnectionPool:
     
     def _create_candelahns_connection(self) -> pyodbc.Connection:
         """Create enhanced Candelahns connection with optimized settings"""
+        # Never hardcode passwords in the repo. Use environment variables for secrets.
+        pwd = os.environ.get("CANDELAHNS_PWD", "")
+        if not pwd:
+            raise RuntimeError("Missing CANDELAHNS_PWD environment variable for Candelahns connection.")
         conn_str = (
             "DRIVER={ODBC Driver 17 for SQL Server};"
             "SERVER=103.86.55.183,10305;"
             "DATABASE=Candelahns;"
             "UID=ReadOnlyUser;"
-            "PWD=902729@Rafy;"
+            f"PWD={pwd};"
             "Encrypt=no;"
             "TrustServerCertificate=yes;"
             f"Connection Timeout={DatabaseConfig.CONNECTION_TIMEOUT};"
@@ -421,12 +427,16 @@ class EnhancedDatabaseConnection:
     
     def _connect_candelahns(self) -> pyodbc.Connection:
         """Connect to Candelahns DB with enhanced settings"""
+        # Never hardcode passwords in the repo. Use environment variables for secrets.
+        pwd = os.environ.get("CANDELAHNS_PWD", "")
+        if not pwd:
+            raise RuntimeError("Missing CANDELAHNS_PWD environment variable for Candelahns connection.")
         conn_str = (
             "DRIVER={ODBC Driver 17 for SQL Server};"
             "SERVER=103.86.55.183,10305;"
             "DATABASE=Candelahns;"
             "UID=ReadOnlyUser;"
-            "PWD=902729@Rafy;"
+            f"PWD={pwd};"
             "Encrypt=no;"
             "TrustServerCertificate=yes;"
             f"Connection Timeout={DatabaseConfig.CONNECTION_TIMEOUT};"

@@ -8,7 +8,7 @@ import os
 # BRANCH CONFIGURATION
 # Branch configuration
 # ========================
-SELECTED_BRANCH_IDS = [2, 3, 4, 6, 8, 10, 14, 15]
+SELECTED_BRANCH_IDS = [2, 3, 4, 6, 14, 15, 16]
 
 BRANCH_NAMES = {
     2: "Khadda Main Branch",
@@ -93,8 +93,44 @@ ORDER_TYPES = {
 # ========================
 # FRESH PICK PRODUCTS
 # ========================
-# Fresh Pick removed from this deployment
-FRESH_PICK_PRODUCTS = []    
+# Fresh Pick product names:
+# - `FRESH_PICK_PRODUCTS` are the canonical (target/KDS) names used for display/targets.
+# - `FRESH_PICK_SALES_ITEM_NAMES` are the CandelaFP item_name variants seen in the FP DB.
+FRESH_PICK_PRODUCTS = [
+    "Chicken Breast Boneless",
+    "Chicken Broast",
+    "Chicken Karahi Cut",
+    "Chicken Leg Boneless",
+    "Chicken Neck & Rib Cage",
+    "Chicken Tikka Cut",
+    "Chicken Wings",
+    "Whole Chicken",
+    "Chicken Skin-on",
+]
+
+# CandelaFP (FP DB) item_name variants that should be included in Fresh Pick sales filtering.
+# This keeps the dashboard resilient when FP uses short names / different punctuation (e.g., "skin on" vs "skin-on").
+FRESH_PICK_SALES_ITEM_NAMES = [
+    "chicken breast boneless",
+    "chicken broast",
+    "chicken karahi cut",
+    "chicken leg boneless",
+    "chicken neck",
+    "chicken neck & rib cage",
+    "chicken skin on",
+    "chicken tikka cut",
+    "chicken wings",
+    "whole chicken",
+    "whole chicken skin-on",
+]
+
+# Optional vendor/customer aliasing for Fresh Pick.
+# Use this when CandelaFP `Customer` naming differs from KDS targets `vendor` naming.
+# Keys/values should be lowercased normalized strings (see Fresh Pick tab `_norm_text`).
+FRESH_PICK_VENDOR_ALIASES = {
+    "ala rahi": "ala rahi dha",
+    "jinnah hospital hostel": "jinnah medical college canteen",
+}
 
 # ========================
 # PRODUCT CATEGORIES
@@ -110,8 +146,13 @@ SALE_CATEGORIES = [
     "SALES - ROLL",
     "SALES - NASHTA",
     "Deal",
+    "Deals",
     "Breakfast",
-    "SALES - BEVERAGES"
+    "Nashta",
+    "SALES",
+    "Special Items",
+    "Continental",
+    "Sales-Iftar"
 ]
 
 QTY_CATEGORIES = [
@@ -122,7 +163,6 @@ QTY_CATEGORIES = [
 # Products to hide from chef reports
 HIDDEN_PRODUCTS = [
     'Sales - Employee Food',
-    'Deals',
     'Modifiers'
 ]
 

@@ -23,17 +23,14 @@ import json
 from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
-
-import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-
-# Global font and style settings for modern look
-plt.rcParams['font.family'] = 'sans-serif'
-plt.rcParams['font.sans-serif'] = ['Inter', 'Outfit', 'Segoe UI', 'Arial', 'Helvetica', 'DejaVu Sans', 'sans-serif']
-plt.rcParams['text.color'] = '#1A1A1A'
-plt.rcParams['axes.labelcolor'] = '#1A1A1A'
-plt.rcParams['figure.dpi'] = 200
+import concurrent.futures
+import matplotlib
+import matplotlib.patches as patches
+matplotlib.use('Agg') # Faster headless rendering
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
 
 from modules.config import BRANCH_NAMES, RAMZAN_DEALS_PRODUCT_IDS, SELECTED_BRANCH_IDS
 from modules.database import (
@@ -106,7 +103,11 @@ def table_image(
 ) -> List[Path]:
     saved: List[Path] = []
     if df.empty:
-        fig, ax = plt.subplots(figsize=(15, 3.5))
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+        fig = Figure(figsize=(15, 3.5))
+        canvas = FigureCanvas(fig)
+        ax = fig.add_subplot(111)
         ax.axis("off")
         ax.text(0.5, 0.6, title, ha="center", va="center", fontsize=20, weight="bold", color="#2C3E50")
         ax.text(0.5, 0.35, "No data available.", ha="center", va="center", fontsize=14, color="#7F8C8D", style='italic')
@@ -122,7 +123,11 @@ def table_image(
         nrows = len(chunk)
         # Increase figure height multiplier to accommodate larger text padding
         fig_h = max(4.0, 1.5 + (nrows * 0.45))
-        fig, ax = plt.subplots(figsize=(15, fig_h))
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+        fig = Figure(figsize=(15, fig_h))
+        canvas = FigureCanvas(fig)
+        ax = fig.add_subplot(111)
         ax.axis("off")
         
         # Add a subtle background color to figure
@@ -192,13 +197,17 @@ def render_branch_cards(
     cols = 2
     rows = max(1, (n + cols - 1) // cols)
     # Give cards a bit more vertical breathing room
-    fig, axes = plt.subplots(rows, cols, figsize=(15, max(4.5, rows * 4.0)))
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+    fig = Figure(figsize=(15, max(4.5, rows * 4.0)))
+    canvas = FigureCanvas(fig)
+    axes = []
+    for j in range(n):
+        ax = fig.add_subplot(rows, cols, j + 1)
+        axes.append(ax)
     fig.patch.set_facecolor('#F8F9F9')
     
-    if rows == 1:
-        axes = [axes] if cols == 1 else list(axes)
-    else:
-        axes = [ax for row_axes in axes for ax in row_axes]
+    pass
 
     for i, ax in enumerate(axes):
         ax.axis("off")
@@ -208,7 +217,6 @@ def render_branch_cards(
         r = df_cards.iloc[i]
         title = f"{BRANCH_NAMES.get(int(r['shop_id']), r['shop_name'])}".upper()
         
-        import matplotlib.patches as patches
         # Add subtle shadow
         shadow = patches.FancyBboxPatch(
             (0.045, 0.045), 0.92, 0.90,
@@ -420,7 +428,6 @@ def build_khadda_diagnostics_snapshot(
     return kh_disp[
         [
             "shop_id",
-            "employee_id",
             "employee_code",
             "employee_name",
             "shop_name",
@@ -918,7 +925,7 @@ def generate_snapshots(
         p_dir = out_root / "all_products_by_branch"
         p_dir.mkdir(parents=True, exist_ok=True)
         save_table_dump(products, p_dir / "_all_products_by_branch_raw.csv")
-        for b in branches:
+        def render_branch_products(b):
             bdf = products[products["shop_id"] == int(b)].copy()
             bname = BRANCH_NAMES.get(int(b), f"branch_{b}")
             if not bdf.empty:
@@ -931,6 +938,9 @@ def generate_snapshots(
                 subtitle=subtitle_label,
             )
 
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            executor.map(render_branch_products, branches)
+
     # 3) Employee-wise Totals (No Sales/Candelahns), branch-wise
     emp = None
     if enabled.get("qr_employee_no_sales", True) or enabled.get("qr_employee_with_sales", True):
@@ -940,12 +950,11 @@ def generate_snapshots(
         e_dir = out_root / "employee_wise_no_sales_branch_wise"
         e_dir.mkdir(parents=True, exist_ok=True)
         save_table_dump(emp, e_dir / "_employee_wise_no_sales_branch_wise_raw.csv")
-        for b in branches:
+        def render_emp_no_sales(b):
             edf = emp[emp["shop_id"] == int(b)].copy()
             bname = BRANCH_NAMES.get(int(b), f"branch_{b}")
             if not edf.empty:
                 edf = edf[[
-                    "employee_id",
                     "employee_code",
                     "employee_name",
                     "transaction_count",
@@ -957,8 +966,8 @@ def generate_snapshots(
                 edf["transaction_count"] = pd.to_numeric(edf["transaction_count"], errors="coerce").fillna(0).astype(int)
                 edf = edf.rename(
                     columns={
-                        "employee_id": "Emp ID",
-                        "employee_code": "Field Code",
+                        # "employee_id": "Emp ID",
+                        "employee_code": "Employee Code",
                         "employee_name": "Employee",
                         "transaction_count": "Tx Count",
                         "Indoge_total_price": "QR Total Sales",
@@ -973,17 +982,19 @@ def generate_snapshots(
                 subtitle=subtitle_label,
             )
 
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            executor.map(render_emp_no_sales, branches)
+
     if enabled.get("qr_employee_with_sales", True):
         # 3b) QR Employee totals (with sales + both commissions), branch-wise
         e2_dir = out_root / "qr_employee_totals_with_sales"
         e2_dir.mkdir(parents=True, exist_ok=True)
         save_table_dump(emp, e2_dir / "_qr_employee_totals_with_sales_raw.csv")
-        for b in branches:
+        def render_emp_with_sales(b):
             edf = emp[emp["shop_id"] == int(b)].copy()
             bname = BRANCH_NAMES.get(int(b), f"branch_{b}")
             if not edf.empty:
                 edf = edf[[
-                    "employee_id",
                     "employee_code",
                     "employee_name",
                     "transaction_count",
@@ -997,8 +1008,8 @@ def generate_snapshots(
                 edf["transaction_count"] = pd.to_numeric(edf["transaction_count"], errors="coerce").fillna(0).astype(int)
                 edf = edf.rename(
                     columns={
-                        "employee_id": "Emp ID",
-                        "employee_code": "Field Code",
+                        # "employee_id": "Emp ID",
+                        "employee_code": "Employee Code",
                         "employee_name": "Employee",
                         "transaction_count": "Tx Count",
                         "total_sale": "Total Sales",
@@ -1015,6 +1026,9 @@ def generate_snapshots(
                 subtitle=subtitle_label,
             )
 
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            executor.map(render_emp_with_sales, branches)
+
     # 4) Ramzan deals: branch-wise + overall product-wise
     if enabled.get("ramzan_deals", True):
         ram_branch, ram_overall = build_ramzan_tables(start_date, end_date, branches)
@@ -1022,7 +1036,7 @@ def generate_snapshots(
         r_dir.mkdir(parents=True, exist_ok=True)
         save_table_dump(ram_branch, r_dir / "_ramzan_branch_raw.csv")
         save_table_dump(ram_overall, r_dir / "_ramzan_overall_raw.csv")
-        for b in branches:
+        def render_ramzan_branch(b):
             rdf = ram_branch[ram_branch["shop_id"] == int(b)].copy()
             bname = BRANCH_NAMES.get(int(b), f"branch_{b}")
             if not rdf.empty:
@@ -1034,6 +1048,9 @@ def generate_snapshots(
                 rows_per_page=30,
                 subtitle=subtitle_label,
             )
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            executor.map(render_ramzan_branch, branches)
 
         if not ram_overall.empty:
             ram_overall = ram_overall.drop(columns=["Product_Item_ID", "Product_code"])
@@ -1095,6 +1112,7 @@ def generate_snapshots(
             e_show_all = e_show_all.rename(
                 columns={
                     "employee_name": "Employee",
+                    "employee_code": "Employee Code",
                     "shop_name": "Shop",
                     "total_units_sold": "Units Sold",
                     "total_sales": "Total Sales",
@@ -1109,18 +1127,20 @@ def generate_snapshots(
                 e_show_all["Total Material Cost"] = e_show_all["Total Material Cost"].map(format_currency)
             if "Total Commission" in e_show_all.columns:
                 e_show_all["Total Commission"] = e_show_all["Total Commission"].map(format_currency)
+            if "Employee Code" in e_show_all.columns:
+                e_show_all["Employee Code"] = e_show_all["Employee Code"].fillna("")
         else:
             e_show_all = pd.DataFrame()
 
-        # Branch-wise employee summary snapshots (exclude shop_id, total_transactions, avg rate)
-        for b in branches:
+        # Branch-wise employee summary snapshots (exclude shop_id, employee_id, total_transactions, avg rate)
+        def render_mcc_emp_summary(b):
             bname = BRANCH_NAMES.get(int(b), f"branch_{b}")
             bdf = e_show_all.copy()
             if not bdf.empty and "Shop" in bdf.columns:
                 bdf = bdf[bdf["Shop"] == bname].copy()
             if "Shop" in bdf.columns:
                 bdf = bdf.drop(columns=["Shop"], errors="ignore")
-            bdf = bdf.drop(columns=["shop_id", "total_transactions", "Avg Rate"], errors="ignore")
+            bdf = bdf.drop(columns=["shop_id", "employee_id", "total_transactions", "Avg Rate"], errors="ignore")
             table_image(
                 bdf,
                 title=f"Material Cost Commission - Employee Summary - {bname}",
@@ -1128,6 +1148,9 @@ def generate_snapshots(
                 rows_per_page=32,
                 subtitle=subtitle_label,
             )
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            executor.map(render_mcc_emp_summary, branches)
 
         branch_prod_df = get_branch_product_material_cost_summary(start_date, end_date, branches, data_mode=data_mode)
         if branch_prod_df is not None and not branch_prod_df.empty:
@@ -1269,6 +1292,7 @@ def generate_snapshots(
                 columns={
                     "shop_name": "Shop",
                     "employee_name": "Employee",
+                    "employee_code": "Employee Code",
                     "tx_fixed": "Tx (1-10 Mar)",
                     "sales_fixed": "Sales (1-10 Mar)",
                     "tx_post": "Tx (Post-cutoff)",
@@ -1278,7 +1302,7 @@ def generate_snapshots(
                     "commission_combined": "Commission (Combined)",
                 }
             )
-            cdf = cdf.drop(columns=["shop_id", "employee_id", "employee_code"], errors="ignore")
+            cdf = cdf.drop(columns=["shop_id", "employee_id"], errors="ignore")
             for col in ["Sales (1-10 Mar)", "Sales (Post-cutoff)", "Sales (Combined)", "Commission (Combined)"]:
                 if col in cdf.columns:
                     cdf[col] = cdf[col].map(lambda x: f"{x:,.0f}")
@@ -1294,6 +1318,9 @@ def generate_snapshots(
     fixed_daily, post_daily = build_khadda_daily_employee_summaries(end_date, data_mode)
     if not fixed_daily.empty:
         fixed_show = fixed_daily.copy().sort_values(["sale_day", "total_sale"], ascending=[False, False])
+        if not fixed_show.empty:
+            fixed_show = fixed_show.drop(columns=["employee_id"], errors="ignore")
+            fixed_show = fixed_show.rename(columns={"employee_code": "Employee Code"})
         fixed_show["total_sale"] = fixed_show["total_sale"].map(format_currency)
     else:
         fixed_show = fixed_daily
@@ -1307,6 +1334,9 @@ def generate_snapshots(
 
     if not post_daily.empty:
         post_show = post_daily.copy().sort_values(["sale_day", "total_sale"], ascending=[False, False])
+        if not post_show.empty:
+            post_show = post_show.drop(columns=["employee_id"], errors="ignore")
+            post_show = post_show.rename(columns={"employee_code": "Employee Code"})
         post_show["total_sale"] = post_show["total_sale"].map(format_currency)
     else:
         post_show = post_daily
@@ -1345,40 +1375,44 @@ def generate_snapshots(
             max_day = pd.to_datetime(end_date).date()
             all_days = pd.date_range(min_day, max_day, freq="D").date
 
-            for (emp_id, emp_code, emp_name), sub in daily_all.groupby(["employee_id", "employee_code", "employee_name"]):
-                sub = sub.copy()
-                day_df = pd.DataFrame({"sale_day": all_days})
-                sub = day_df.merge(sub, on="sale_day", how="left")
-                sub["employee_name"] = emp_name
-                sub["employee_id"] = emp_id
-                sub["employee_code"] = emp_code
-                if "shop_name" in sub.columns:
-                    sub["shop_name"] = sub["shop_name"].fillna("Khadda Main Branch")
-                sub["tx_count"] = pd.to_numeric(sub.get("tx_count", 0), errors="coerce").fillna(0).astype(int)
-                sub["total_sale"] = pd.to_numeric(sub.get("total_sale", 0), errors="coerce").fillna(0.0)
+        def render_khadda_daily(group):
+            (emp_id, emp_code, emp_name), sub = group
+            sub = sub.copy()
+            day_df = pd.DataFrame({"sale_day": all_days})
+            sub = day_df.merge(sub, on="sale_day", how="left")
+            sub["employee_name"] = emp_name
+            sub["employee_id"] = emp_id
+            sub["employee_code"] = emp_code
+            if "shop_name" in sub.columns:
+                sub["shop_name"] = sub["shop_name"].fillna("Khadda Main Branch")
+            sub["tx_count"] = pd.to_numeric(sub.get("tx_count", 0), errors="coerce").fillna(0).astype(int)
+            sub["total_sale"] = pd.to_numeric(sub.get("total_sale", 0), errors="coerce").fillna(0.0)
 
-                total_tx = int(sub["tx_count"].sum())
-                total_sales = float(sub["total_sale"].sum())
+            total_tx = int(sub["tx_count"].sum())
+            total_sales = float(sub["total_sale"].sum())
 
-                show = sub[["sale_day", "tx_count", "total_sale"]].copy()
-                show = show.rename(columns={"sale_day": "Date", "tx_count": "Tx Count", "total_sale": "Sales"})
-                show["Date"] = show["Date"].astype(str)
-                show["Sales"] = show["Sales"].map(lambda x: f"{x:,.0f}")
+            show = sub[["sale_day", "tx_count", "total_sale"]].copy()
+            show = show.rename(columns={"sale_day": "Date", "tx_count": "Tx Count", "total_sale": "Sales"})
+            show["Date"] = show["Date"].astype(str)
+            show["Sales"] = show["Sales"].map(lambda x: f"{x:,.0f}")
 
-                show = pd.concat(
-                    [show, pd.DataFrame([{"Date": "TOTAL", "Tx Count": total_tx, "Sales": f"{total_sales:,.0f}"}])],
-                    ignore_index=True,
-                )
+            show = pd.concat(
+                [show, pd.DataFrame([{"Date": "TOTAL", "Tx Count": total_tx, "Sales": f"{total_sales:,.0f}"}])],
+                ignore_index=True,
+            )
 
-                safe_name = _safe_filename(emp_name)
-                out_path = emp_dir / f"{safe_name}_{int(emp_id)}.png"
-                table_image(
-                    show,
-                    title=f"Khadda Daily Sales - {emp_name}",
-                    out_path=out_path,
-                    rows_per_page=35,
-                    subtitle=f"{min_day} to {max_day}",
-                )
+            safe_name = _safe_filename(emp_name)
+            out_path = emp_dir / f"{safe_name}_{int(emp_id)}.png"
+            table_image(
+                show,
+                title=f"Khadda Daily Sales - {emp_name}",
+                out_path=out_path,
+                rows_per_page=35,
+                subtitle=f"{min_day} to {max_day}",
+            )
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            executor.map(render_khadda_daily, daily_all.groupby(["employee_id", "employee_code", "employee_name"]))
 
     return out_root
 

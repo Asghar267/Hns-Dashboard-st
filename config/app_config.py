@@ -1,4 +1,4 @@
-﻿"""
+"""
 Application Configuration
 Centralized configuration management for the dashboard
 """
@@ -22,7 +22,8 @@ class DatabaseConfig:
     port: int = 1433
     database: str = "candelahns"
     username: str = "sa"
-    password: str = "123456789"
+    # Avoid committing passwords; supply via environment variables at runtime.
+    password: str = ""
     driver: str = "ODBC Driver 17 for SQL Server"
 
 
@@ -68,20 +69,24 @@ class AppConfig:
     NAVBAR_ITEMS = {
     "tabs": {
         "Overview": {"icon": "chart", "description": "Main dashboard overview with key metrics"},
+        "Call Center": {"icon": "phone", "description": "HNSYGCC call center sales snapshot and trend"},
         "Order Takers": {"icon": "users", "description": "Order Taker performance analysis"},
         "Chef Sales": {"icon": "utensils", "description": "Chef sales and product performance"},
         "Chef Targets": {"icon": "target", "description": "Chef sales targets"},
+        "Fresh Pick": {"icon": "box", "description": "Fresh Pick sales and quantity targets"},
+        "FP Final Difference": {"icon": "file-diff", "description": "Final Difference Report for Food Panda (Excel + DB)"},
         "Food Panda": {"icon": "delivery", "description": "Food Panda transactions (full listing)"},
         "OT Targets": {"icon": "trend", "description": "Order taker targets"},
         "QR Commission": {"icon": "qr", "description": "QR/Blinkco commission analysis"},
         "Khadda Diagnostics": {"icon": "search", "description": "Khadda data diagnostics"},
         "Database Health Diagnostics": {"icon": "database", "description": "Database health checks: orphans, stale branches, blanks, and filter impact"},
-        "Web Items Export": {"icon": "download", "description": "Export web items (iswebitem=1) to Excel"},
         "Material Cost Commission": {"icon": "money", "description": "Material cost commissions"},
+        "Product PNL": {"icon": "table", "description": "Branch/product profitability split by Non-Foodpanda and Foodpanda"},
         "Trends & Analytics": {"icon": "chart", "description": "Trends and analytics"},
         "Ramzan Deals": {"icon": "moon", "description": "Ramzan special deals"},
         "Category Filters & Coverage": {"icon": "filter", "description": "Category filters and coverage"},
         "Pivot Tables": {"icon": "table", "description": "Interactive pivot tables"},
+        "Shifts": {"icon": "clock", "description": "Shift-wise sales analysis (Morning, Lunch, Dinner)"},
         "Admin & Snapshots": {"icon": "users", "description": "Admin controls + snapshot settings/viewer", "admin_only": True}
     },
     "globals": [
